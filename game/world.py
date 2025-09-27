@@ -20,7 +20,7 @@ class Chunk:
     def __init__(self, x: int, z: int):
         self.x = x
         self.z = z
-        self.blocks = {}  # Dict to store only non-air blocks
+        self.blocks: Dict[Tuple[int, int, int], Block] = {}  # to store only non-air blocks
         self.generated = False
     
     def get_block(self, x: int, y: int, z: int) -> Block:
@@ -227,39 +227,35 @@ class World:
         chunk.set_block(local_x, local_y, local_z, block_type)
 
     def get_visible_chunks(self, center_x: int, center_z: int, render_distance: int = 2) -> List[Chunk]:
-        """Get list of chunks that should be visible/loaded"""
+        """Get list of chunks that should be visible/loaded, sorted by distance from center"""
         visible_chunks = []
-        
+
         center_chunk_x, center_chunk_z = self.get_chunk_coords(center_x, center_z)
-        
+
         # Debug: Print chunk loading info occasionally
         if hasattr(self, '_debug_chunk_counter'):
             self._debug_chunk_counter += 1
         else:
             self._debug_chunk_counter = 0
-            
-        # Always include the center chunk first (where the player is)
-        center_chunk = self.get_or_create_chunk(center_chunk_x, center_chunk_z)
-        visible_chunks.append(center_chunk)
-        
+
+        # Collect chunks with their distances
+        chunk_distance_pairs = []
+
         for dx in range(-render_distance, render_distance + 1):
             for dz in range(-render_distance, render_distance + 1):
-                # Skip the center chunk since we already added it
-                if dx == 0 and dz == 0:
-                    continue
-                    
                 chunk_x = center_chunk_x + dx
                 chunk_z = center_chunk_z + dz
-                
+
                 # Only load chunks within circular distance
                 distance = math.sqrt(dx*dx + dz*dz)
                 if distance <= render_distance:
                     chunk = self.get_or_create_chunk(chunk_x, chunk_z)
-                    visible_chunks.append(chunk)
-        
-        # Debug: Print chunk info every 120 calls (less frequent)
-        if self._debug_chunk_counter % 120 == 0:
-            print(f"Chunk Debug - Center: ({center_chunk_x}, {center_chunk_z}), Render Distance: {render_distance}")
-            print(f"Chunk Debug - Loaded {len(visible_chunks)} chunks")
+                    chunk_distance_pairs.append((chunk, distance))
+
+        # Sort by distance (closest first)
+        chunk_distance_pairs.sort(key=lambda x: x[1])
+
+        # Extract sorted chunks
+        visible_chunks = [chunk for chunk, _ in chunk_distance_pairs]
         
         return visible_chunks

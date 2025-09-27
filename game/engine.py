@@ -246,9 +246,6 @@ class GameEngine:
             
             # Control frame rate
             self.clock.tick(self.fps_target)
-            # Reduce console output frequency for better performance
-            if self.frame_count % 60 == 0:  # Every 1 second instead of every frame
-                print(f"FPS: {self.clock.get_fps():.1f} | Frames: {self.frame_count}", end='\r')
         
         # Cleanup
         pygame.quit()

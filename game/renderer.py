@@ -7,6 +7,8 @@ import math
 import numpy as np
 from typing import List, Tuple
 from .blocks import BlockType
+from .world import World
+from .camera import Camera
 from .font_manager import get_font_manager
 
 class Renderer:
@@ -238,7 +240,7 @@ class Renderer:
         except (ValueError, TypeError):
             pass
     
-    def render_world(self, world, camera, performance_mode=True):
+    def render_world(self, world: World, camera: Camera, performance_mode=True):
         """Render the visible world"""
         # Clear screen
         self.screen.fill((135, 206, 235))  # Sky blue
