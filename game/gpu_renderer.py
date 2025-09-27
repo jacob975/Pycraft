@@ -23,7 +23,8 @@ import time
 from typing import Dict, Tuple, List, Optional
 import numpy as np
 from itertools import compress
-from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing as mp
 
 from .world import World, Chunk
 from .camera import Camera
@@ -119,6 +120,12 @@ class GPURenderer:
         self.use_numpy_optimization = True
             
         print(f"🚀 ModernGL GPU Renderer initialized - Screen: {self.screen_width}x{self.screen_height}")
+        # Thread pool for chunk processing
+        self.thread_pool = ThreadPoolExecutor(max_workers=min(8, mp.cpu_count()))
+        self.use_threading = True
+        
+        print(f"🚀 Initialized with {self.thread_pool._max_workers} worker threads")
+
 
     # ------------------------------------------------------------------
     # Initialization methods
@@ -432,8 +439,8 @@ class GPURenderer:
         self.ctx.depth_func = '<'  # Less than comparison
         
         # Determine render limits based on performance mode 
-        max_blocks = 409600 if performance_mode else 819200
-        render_distance = 4
+        max_blocks = 40960 if performance_mode else 81920
+        render_distance = 3
         
         # Get visible chunks using optimized culling
         visible_chunks = self._get_optimized_visible_chunks(world, camera, render_distance)
@@ -448,7 +455,7 @@ class GPURenderer:
         self._render_ui_moderngl(world, camera)
         st4 = time.time()
         # Update performance stats
-        print(f"Chunk culling: {(st1 - start_time)*1000:.2f} ms, Block prep: {(st2 - st1)*1000:.2f} ms, Block render: {(st3 - st2)*1000:.2f} ms, UI render: {(st4 - st3)*1000:.2f} ms")
+        #print(f"Chunk culling: {(st1 - start_time)*1000:.2f} ms, Block prep: {(st2 - st1)*1000:.2f} ms, Block render: {(st3 - st2)*1000:.2f} ms, UI render: {(st4 - st3)*1000:.2f} ms")
         render_time = (time.time() - start_time) * 1000
         self.last_stats['render_time_ms'] = render_time
         self.last_stats['frames_rendered'] += 1
@@ -567,9 +574,8 @@ class GPURenderer:
         max_distance_sq = (render_distance * 16 + 16) ** 2
 
         # Pre-allocate arrays for maximum efficiency
-        estimated_blocks = len(chunks) * 100  # Rough estimate
-        positions_buffer = np.zeros((estimated_blocks, 3), dtype=np.float32)
-        colors_buffer = np.zeros((estimated_blocks, 3), dtype=np.float32)
+        positions_buffer = np.zeros((max_blocks, 3), dtype=np.float32)
+        colors_buffer = np.ones((max_blocks, 3), dtype=np.float32)
 
         block_count = 0
         # Batch process chunks with minimal object creation
@@ -591,7 +597,7 @@ class GPURenderer:
             world_positions[:, 2] += chunk_world_z
 
             # Filter solid blocks (vectorized)
-            solid_mask = np.array([block.is_solid() for block in blocks_list])
+            solid_mask = [block.is_solid() for block in blocks_list]
             valid_positions = world_positions[solid_mask]
             valid_blocks = list(compress(blocks_list, solid_mask))
 
@@ -608,7 +614,7 @@ class GPURenderer:
 
             # Add to buffers
             chunk_count = len(culled_positions)
-            if block_count + chunk_count > estimated_blocks:
+            if block_count + chunk_count > max_blocks:
                 # Resize buffers if needed
                 new_size = (block_count + chunk_count) * 2
                 positions_buffer = np.resize(positions_buffer, (new_size, 3))
@@ -649,7 +655,7 @@ class GPURenderer:
             'colors': final_colors,
             'types': np.zeros(block_count, dtype=np.int32)
         }
-    
+
     def _get_optimized_visible_chunks(self, world: World, camera: Camera, render_distance: int) -> List[Chunk]:
         # Get chunks with distance-based culling
         return world.get_visible_chunks(
