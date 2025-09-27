@@ -62,10 +62,10 @@ class Player:
                 movement -= ground_forward * move_speed * dt
         
         if keys[pygame.K_d]:
-            movement += right * move_speed * dt
+            movement -= right * move_speed * dt
         
         if keys[pygame.K_a]:
-            movement -= right * move_speed * dt
+            movement += right * move_speed * dt
         
         # Vertical movement (only in fly mode)
         if self.flying:

@@ -1,5 +1,6 @@
 pygame
 noise
 numpy
-PyOpenGL
-PyOpenGL_accelerate
+moderngl>=5.8.0
+moderngl-window>=2.4.4
+cython>=3.0.0

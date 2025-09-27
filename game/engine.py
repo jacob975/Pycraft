@@ -40,7 +40,7 @@ class GameEngine:
         # Choose renderer based on availability and preference
         if self.use_gpu:
             self.renderer = GPURenderer(width, height)
-            print("使用簡化GPU渲染器 - OpenGL硬體加速")
+            print("使用GPU渲染器 - OpenGL硬體加速")
         else:
             self.renderer = Renderer(width, height)
             print("使用CPU渲染器 - 軟體渲染")
@@ -246,6 +246,7 @@ class GameEngine:
             
             # Control frame rate
             self.clock.tick(self.fps_target)
+            print(f"當前FPS: {self.clock.get_fps():.2f}", end='\r')
         
         # Cleanup
         pygame.quit()

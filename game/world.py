@@ -172,6 +172,11 @@ class World:
             # Set noise seed for consistent terrain
             random.seed(self.seed)
     
+    @property
+    def chunk_size(self) -> int:
+        """Get the chunk size"""
+        return Chunk.SIZE
+    
     def get_chunk_coords(self, world_x: int, world_z: int) -> Tuple[int, int]:
         """Convert world coordinates to chunk coordinates"""
         chunk_x = math.floor(world_x / Chunk.SIZE)
@@ -194,6 +199,11 @@ class World:
             self.chunks[chunk_coords] = chunk
         
         return self.chunks[chunk_coords]
+    
+    def get_chunk(self, chunk_x: int, chunk_z: int) -> Optional[Chunk]:
+        """Get existing chunk without creating it"""
+        chunk_coords = (chunk_x, chunk_z)
+        return self.chunks.get(chunk_coords, None)
     
     def get_block(self, world_x: int, world_y: int, world_z: int) -> Block:
         """Get block at world coordinates"""
@@ -223,8 +233,22 @@ class World:
         
         center_chunk_x, center_chunk_z = self.get_chunk_coords(center_x, center_z)
         
+        # Debug: Print chunk loading info occasionally
+        if hasattr(self, '_debug_chunk_counter'):
+            self._debug_chunk_counter += 1
+        else:
+            self._debug_chunk_counter = 0
+            
+        # Always include the center chunk first (where the player is)
+        center_chunk = self.get_or_create_chunk(center_chunk_x, center_chunk_z)
+        visible_chunks.append(center_chunk)
+        
         for dx in range(-render_distance, render_distance + 1):
             for dz in range(-render_distance, render_distance + 1):
+                # Skip the center chunk since we already added it
+                if dx == 0 and dz == 0:
+                    continue
+                    
                 chunk_x = center_chunk_x + dx
                 chunk_z = center_chunk_z + dz
                 
@@ -233,5 +257,10 @@ class World:
                 if distance <= render_distance:
                     chunk = self.get_or_create_chunk(chunk_x, chunk_z)
                     visible_chunks.append(chunk)
+        
+        # Debug: Print chunk info every 60 calls
+        if self._debug_chunk_counter % 60 == 0:
+            print(f"Chunk Debug - Center: ({center_chunk_x}, {center_chunk_z}), Render Distance: {render_distance}")
+            print(f"Chunk Debug - Loaded {len(visible_chunks)} chunks")
         
         return visible_chunks
