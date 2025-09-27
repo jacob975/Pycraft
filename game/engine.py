@@ -66,11 +66,11 @@ class GameEngine:
         # Don't enable mouse lock by default - let user press Tab to enable
         # self.player.toggle_mouse_lock()
         
-        # Game state
-        self.fps_target = 60 if self.use_gpu else 30  # Higher FPS with GPU
+        # Game state - optimized for performance
+        self.fps_target = 120 if self.use_gpu else 60  # Higher FPS targets
         self.debug_mode = False
-        # Default to performance mode on GPU to keep block count manageable
-        self.performance_mode = True if self.use_gpu else False
+        # Always start with performance mode for better FPS
+        self.performance_mode = True  # Always start in performance mode
         self.startup_time = 0.0  # Track startup time to ignore early ESC
         
         # Performance tracking
@@ -246,7 +246,9 @@ class GameEngine:
             
             # Control frame rate
             self.clock.tick(self.fps_target)
-            print(f"當前FPS: {self.clock.get_fps():.2f}", end='\r')
+            # Reduce console output frequency for better performance
+            if self.frame_count % 60 == 0:  # Every 1 second instead of every frame
+                print(f"FPS: {self.clock.get_fps():.1f} | Frames: {self.frame_count}", end='\r')
         
         # Cleanup
         pygame.quit()

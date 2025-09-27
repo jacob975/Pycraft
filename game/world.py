@@ -57,31 +57,30 @@ class Chunk:
                     # Fallback to simple sine wave pattern
                     height = int(30 + 10 * math.sin((world_x + x) * 0.1) * math.cos((world_z + z) * 0.1))
                 
-                # Generate terrain layers with proper structure
-                # Start from bedrock level and build up
-                for y in range(max(0, height - 20), height + 1):
-                    if y <= 5:  # Bedrock layer at very bottom
+                # Generate terrain layers with simpler structure for performance
+                # Reduced height range for fewer blocks
+                for y in range(max(15, height - 8), height + 1):  # Smaller range
+                    if y <= 10:  # Bedrock layer (reduced)
                         self.set_block(x, y, z, BlockType.STONE)
                         blocks_generated += 1
-                    elif y <= height - 5:  # Deep stone layer
+                    elif y <= height - 3:  # Shallow stone layer (reduced)
                         self.set_block(x, y, z, BlockType.STONE)
                         blocks_generated += 1
-                    elif y < height:  # Dirt layer (3-4 blocks thick)
+                    elif y < height:  # Dirt layer (1-2 blocks thick)
                         self.set_block(x, y, z, BlockType.DIRT)
                         blocks_generated += 1
                     elif y == height:  # Surface layer
-                        # Use grass for most surfaces, stone for very high areas
-                        if height > 45:
+                        # Use grass for most surfaces
+                        if height > 40:
                             self.set_block(x, y, z, BlockType.STONE)
                         else:
                             self.set_block(x, y, z, BlockType.GRASS)
                         blocks_generated += 1
                 
-                # Add trees in appropriate locations
-                # Only generate trees on grass surfaces at reasonable heights
-                if (height < 40 and height > 25 and  # Reasonable height range
-                    world_z > 5 and  # Not too close to spawn
-                    random.random() < 0.01):  # 1% chance for better distribution
+                # Reduce tree generation for better performance
+                if (height < 35 and height > 25 and  # Smaller height range
+                    world_z > 10 and  # Further from spawn
+                    random.random() < 0.005):  # 0.5% chance (reduced from 1%)
                     surface_block = self.get_block(x, height, z)
                     if surface_block.type == BlockType.GRASS:
                         self._generate_tree(x, height + 1, z)
@@ -92,19 +91,19 @@ class Chunk:
     def _get_height_at(self, world_x: int, world_z: int) -> int:
         """Get terrain height at world coordinates"""
         if noise:
-            # Create more interesting terrain with hills and valleys
-            # Base terrain layer for variety
-            base_height = noise.pnoise2(world_x * 0.01, world_z * 0.01, 
-                                      octaves=3, persistence=0.5, lacunarity=2.0)
+            # Create more interesting terrain with hills and valleys (reduced complexity)
+            # Base terrain layer for variety (reduced)
+            base_height = noise.pnoise2(world_x * 0.02, world_z * 0.02,  # Less detail
+                                      octaves=2, persistence=0.4, lacunarity=1.8)  # Simpler
             
-            # Create hills in visible area in front of spawn
+            # Create hills in visible area in front of spawn (smaller)
             hill_height = 0
-            hill_center_x, hill_center_z = 8, 20  # Hill in front of spawn
+            hill_center_x, hill_center_z = 8, 18  # Closer hill
             hill_distance = math.sqrt((world_x - hill_center_x)**2 + (world_z - hill_center_z)**2)
             
-            if hill_distance < 12:  # Hill radius
-                hill_factor = (1 - hill_distance / 12) ** 1.5
-                hill_height = hill_factor * 18  # Hill up to 18 blocks high
+            if hill_distance < 8:  # Smaller hill radius
+                hill_factor = (1 - hill_distance / 8) ** 1.2
+                hill_height = hill_factor * 8  # Smaller hill (8 blocks high)
             
             # Flat area around spawn point for easy start
             spawn_distance = math.sqrt((world_x - 8)**2 + (world_z - 8)**2)
@@ -258,8 +257,8 @@ class World:
                     chunk = self.get_or_create_chunk(chunk_x, chunk_z)
                     visible_chunks.append(chunk)
         
-        # Debug: Print chunk info every 60 calls
-        if self._debug_chunk_counter % 60 == 0:
+        # Debug: Print chunk info every 120 calls (less frequent)
+        if self._debug_chunk_counter % 120 == 0:
             print(f"Chunk Debug - Center: ({center_chunk_x}, {center_chunk_z}), Render Distance: {render_distance}")
             print(f"Chunk Debug - Loaded {len(visible_chunks)} chunks")
         
