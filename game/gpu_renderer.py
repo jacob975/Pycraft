@@ -20,6 +20,7 @@ Notes:
 from __future__ import annotations
 
 import math
+import time
 from typing import Dict, Tuple, List
 from .world import World, Chunk
 from .camera import Camera
@@ -109,6 +110,10 @@ class GPURenderer:
             'blocks': 0,
             'culled_blocks': 0,
         }
+        
+        # Occlusion cache to avoid repeated neighbor checks
+        self._occlusion_cache = {}
+        self._cache_frame = 0
 
         self._init_projection()
 
@@ -139,6 +144,11 @@ class GPURenderer:
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         self._init_projection()
         self._set_camera(camera)
+        
+        # Clear occlusion cache every few frames to prevent stale data
+        self._cache_frame += 1
+        if self._cache_frame % 60 == 0:  # Clear cache every 60 frames
+            self._occlusion_cache.clear()
 
         camera_pos = camera.position
         render_distance = 2  # same as CPU default
@@ -154,33 +164,51 @@ class GPURenderer:
         for chunk in visible_chunks:
             chunk_world_x = chunk.x * chunk.SIZE
             chunk_world_z = chunk.z * chunk.SIZE
-
+            
+            # Pre-calculate camera distance to chunk center for early chunk culling
+            chunk_center_x = chunk_world_x + chunk.SIZE / 2
+            chunk_center_z = chunk_world_z + chunk.SIZE / 2
+            chunk_dist_sq = (chunk_center_x - camera_pos[0])**2 + (chunk_center_z - camera_pos[2])**2
+            
+            # Skip entire chunks that are too far away
+            if chunk_dist_sq > (50 * 50):  # Increased from 40*40 for chunk-level culling
+                culled_blocks += len(chunk.blocks)
+                continue
+            
+            # Sort blocks by distance for better early termination
+            block_distances = []
             for (lx, ly, lz), block in chunk.blocks.items():
                 if not block.is_solid():
                     continue
-
-                # Distance culling (sphere)
+                    
                 wx = chunk_world_x + lx
                 wy = ly
                 wz = chunk_world_z + lz
-                dx = wx - camera_pos[0]
-                dy = wy - camera_pos[1]
-                dz = wz - camera_pos[2]
-                dist_sq = dx*dx + dy*dy + dz*dz
-                if dist_sq > 40 * 40:  # same far block distance as CPU logic
+                
+                # Quick distance calculation (no sqrt for sorting)
+                dist_sq = (wx - camera_pos[0])**2 + (wy - camera_pos[1])**2 + (wz - camera_pos[2])**2
+                block_distances.append((dist_sq, wx, wy, wz, block))
+            
+            # Sort by distance (closest first) and limit processing
+            block_distances.sort(key=lambda x: x[0])
+            
+            for dist_sq, wx, wy, wz, block in block_distances:
+                # Distance culling with pre-calculated distance
+                if dist_sq > 40 * 40:
                     culled_blocks += 1
                     continue
-
+                
                 # Visibility / occlusion: skip if completely surrounded by solid blocks
                 if self._is_fully_occluded(world, wx, wy, wz):
                     culled_blocks += 1
                     continue
-
+                    
                 if blocks_rendered >= max_blocks:
                     break
 
                 faces_rendered += self._render_block_faces(world, wx, wy, wz, block)
                 blocks_rendered += 1
+                
             if blocks_rendered >= max_blocks:
                 break
 
@@ -199,11 +227,25 @@ class GPURenderer:
 
     # ------------------------------------------------------------------
     def _is_fully_occluded(self, world: World, x: int, y: int, z: int) -> bool:
+        # Check cache first
+        cache_key = (x, y, z)
+        if cache_key in self._occlusion_cache:
+            return self._occlusion_cache[cache_key]
+        
         # Check 6 neighbors; if all solid -> occluded
+        neighbors_solid = 0
         for dx, dy, dz in ((1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)):
-            if not world.get_block(x+dx, y+dy, z+dz).is_solid():
+            if world.get_block(x+dx, y+dy, z+dz).is_solid():
+                neighbors_solid += 1
+            else:
+                # Early exit - if any neighbor is not solid, not occluded
+                self._occlusion_cache[cache_key] = False
                 return False
-        return True
+        
+        # All neighbors are solid
+        is_occluded = (neighbors_solid == 6)
+        self._occlusion_cache[cache_key] = is_occluded
+        return is_occluded
 
     def _render_block_faces(self, world: World, x: int, y: int, z: int, block: Block) -> int:
         color = block.get_color()
@@ -261,16 +303,83 @@ class GPURenderer:
         glEnd()
         self._leave_2d()
 
-    def _draw_ui(self, world: World, camera: Camera): # TODO
-        pass
+    def _draw_ui(self, world, camera):
+        """Draw UI using OpenGL text rendering"""
+        try:
+            from .font_manager import get_font_manager
+            font_mgr = get_font_manager()
+            
+            # Switch to 2D rendering mode
+            self._enter_2d()
+            
+            pos = camera.position
+            lines = [
+                f"位置: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})",
+                f"視角: pitch={camera.pitch:.2f}, yaw={camera.yaw:.2f}",
+                "控制:",
+                "WASD - 移動",
+                "滑鼠 - 視角", 
+                "空格/Shift - 上升/下降", 
+                "左鍵 - 破壞 右鍵 - 放置", 
+                "1-4 - 選擇方塊 Tab - 滑鼠",
+                "ESC - 退出"
+            ]
+            
+            # Draw UI text using OpenGL
+            y = 10
+            for i, text in enumerate(lines):
+                size = 28 if i < 2 else 22
+                color = (1.0, 1.0, 0.0) if i < 2 else (1.0, 1.0, 1.0)  # OpenGL color (0-1 range)
+                font_mgr.render_text_opengl(text, 10, y, size, color)
+                y += size + 4
+            
+            self._leave_2d()
+            
+        except Exception as e:
+            # Fallback: print to console if OpenGL text fails
+            pos = camera.position
+            print(f"UI INFO: 位置=({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) 視角=pitch={camera.pitch:.2f}, yaw={camera.yaw:.2f}")
 
     # Called by GameEngine when F3 debug mode is enabled
     def draw_debug_info(self, data: Dict):
-        # Console-based debug info for GPU mode (since OpenGL text overlay is complex)
-        print(f"[DEBUG] FPS={data.get('fps', 0):.1f} Chunk={data.get('chunk', (0,0))} "
-              f"Chunks_Loaded={data.get('chunks_loaded', 0)} Selected_Block={data.get('selected_block', '')} "
-              f"Performance={'ON' if data.get('performance_mode') else 'OFF'} "
-              f"Blocks={self.last_stats['blocks']} Faces={self.last_stats['faces']}")
+        """Draw debug info using OpenGL text rendering"""
+        try:
+            from .font_manager import get_font_manager
+            font_mgr = get_font_manager()
+            
+            # Switch to 2D rendering mode
+            self._enter_2d()
+            
+            lines = [
+                f"FPS: {data.get('fps', 0):.1f}",
+                f"Chunk: {data.get('chunk', (0,0))}",
+                f"Chunks Loaded: {data.get('chunks_loaded', 0)}", 
+                f"選擇方塊: {data.get('selected_block', '')}",
+                f"Performance: {'ON' if data.get('performance_mode') else 'OFF'}", 
+                f"Blocks: {self.last_stats['blocks']} Faces: {self.last_stats['faces']}"
+            ]
+            
+            # Draw debug info on right side
+            x = self.screen_width - 260
+            font_mgr.render_text_list_opengl(lines, x, 10, line_height=30, size=24, color=(1.0, 1.0, 0.0))
+            
+            self._leave_2d()
+            
+        except Exception as e:
+            # Fallback: console output
+            print(f"[DEBUG] FPS={data.get('fps', 0):.1f} Chunk={data.get('chunk', (0,0))} "
+                  f"Chunks_Loaded={data.get('chunks_loaded', 0)} Selected_Block={data.get('selected_block', '')} "
+                  f"Performance={'ON' if data.get('performance_mode') else 'OFF'} "
+                  f"Blocks={self.last_stats['blocks']} Faces={self.last_stats['faces']}")
+
+    def cleanup(self):
+        """Cleanup OpenGL resources"""
+        try:
+            from .font_manager import get_font_manager
+            font_mgr = get_font_manager()
+            font_mgr.cleanup_textures()
+        except Exception:
+            pass
 
 
 __all__ = ["GPURenderer"]
