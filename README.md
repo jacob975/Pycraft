@@ -43,6 +43,8 @@ python main.py
   - `blocks.py`: Block types and definitions
   - `camera.py`: 3D camera system
   - `renderer.py`: 3D rendering system
+  - `gpu_renderer.py`: GPU-accelerated rendering
+  - `font_manager.py`: Font loading and text rendering
 - `assets/`: Game assets (if any)
 
 ## Requirements
