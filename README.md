@@ -53,5 +53,6 @@ python main.py
 - Pygame 2.0+
 - NumPy
 - Noise (for terrain generation)
-- PyOpenGL (for 3D rendering)
-- PyOpenGL_accelerate (optional, for performance)
+- ModernGL (for 3D rendering)
+- Numba (for performance optimization)
+- Cython Imaging Library (Pillow)
