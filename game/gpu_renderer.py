@@ -25,6 +25,7 @@ import numpy as np
 from itertools import compress
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing as mp
+from functools import lru_cache
 
 from .world import World, Chunk
 from .camera import Camera
@@ -440,7 +441,7 @@ class GPURenderer:
         
         # Determine render limits based on performance mode 
         max_blocks = 40960 if performance_mode else 81920
-        render_distance = 3
+        render_distance = 4
         
         # Get visible chunks using optimized culling
         visible_chunks = self._get_optimized_visible_chunks(world, camera, render_distance)
@@ -605,7 +606,8 @@ class GPURenderer:
                 continue
             
             # Vectorized distance calculation
-            distances = np.sum((valid_positions - camera_pos)**2, axis=1)
+            y_weight = 16  # Increase this to weight Y distance more heavily
+            distances = np.sum(np.square(valid_positions - camera_pos) * np.array([1.0, y_weight, 1.0]), axis=1)
             distance_mask = distances <= max_distance_sq
 
             # Apply distance culling
@@ -658,13 +660,16 @@ class GPURenderer:
 
     def _get_optimized_visible_chunks(self, world: World, camera: Camera, render_distance: int) -> List[Chunk]:
         # Get chunks with distance-based culling
-        return world.get_visible_chunks(
+        visible_chunks = world.get_visible_chunks(
             int(camera.position[0]), int(camera.position[2]), 
             render_distance=render_distance
         )
+        # Exclude the chunks that is not visible in camera
+        # TODO
+        return visible_chunks
 
     # ------------------------------------------------------------------
-    #@lru_cache(maxsize=32768)  # Reduced size for actual usage pattern
+    @lru_cache(maxsize=65536)  # Reduced size for actual usage pattern
     def _is_fully_occluded_cached(self, x: int, y: int, z: int) -> bool:
         """
         Fast cached occlusion check for static block positions.
