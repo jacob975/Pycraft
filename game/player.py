@@ -7,17 +7,18 @@ import math
 import numpy as np
 from .camera import Camera
 from .blocks import BlockType
+from .world import World
 
 class Player:
     """Player class handling movement and interactions"""
     
-    def __init__(self, world, spawn_position=(0, 50, 0)):
+    def __init__(self, world: World, spawn_position=(0, 50, 0)):
         self.world = world
         self.camera = Camera(spawn_position)
         
         # Player properties
-        self.speed = 15.0  # Increased ground speed
-        self.fly_speed = 20.0  # Increased fly speed
+        self.speed = 15.0 # blocks per second
+        self.fly_speed = 20.0 # blocks per second
         self.flying = True  # Start in fly mode for simplicity
         
         # Selected block type
@@ -34,10 +35,8 @@ class Player:
         move_speed = self.fly_speed if self.flying else self.speed
         movement = np.array([0.0, 0.0, 0.0])
         
-
-        
         # Get camera vectors
-        forward = self.camera.get_forward_vector()
+        forward = self.camera.get_horizontal_forward_vector()
         right = self.camera.get_right_vector()
         up = self.camera.get_up_vector()
         

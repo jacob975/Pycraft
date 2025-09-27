@@ -18,6 +18,13 @@ class Camera:
         self.fov = 70.0  # Field of view in degrees
         self.near = 0.1
         self.far = 100.0
+
+        # Cheatsheet
+        # +X: Right
+        # +Y: Up
+        # +Z: Forward
+        # Yaw: 0 = +Z, π/2 = +X
+        # Pitch: 0 = +Z, π/2 = +Y
         
         # Movement sensitivity
         self.mouse_sensitivity = 0.003  # Adjusted for better control
@@ -47,6 +54,14 @@ class Camera:
             math.cos(self.pitch) * math.sin(self.yaw),
             math.sin(self.pitch),  # Positive Y is up
             math.cos(self.pitch) * math.cos(self.yaw)
+        ])
+    
+    def get_horizontal_forward_vector(self) -> np.ndarray:
+        """Get the horizontal forward direction vector"""
+        return np.array([
+            math.sin(self.yaw),
+            0,
+            math.cos(self.yaw)
         ])
     
     def get_right_vector(self) -> np.ndarray:
