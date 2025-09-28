@@ -63,7 +63,6 @@ class GameEngine:
         self.player.camera.yaw = 0.0     # Face forward
         
         print(f"玩家生成位置: ({spawn_x}, {ground_y}, {spawn_z})")
-        print("方塊渲染已修復！您現在應該能看到方塊了。")
         
         # Don't enable mouse lock by default - let user press Tab to enable
         # self.player.toggle_mouse_lock()
