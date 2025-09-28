@@ -567,6 +567,7 @@ class GPURenderer:
         
         # Render UI text (position, controls, etc)
         self._draw_ui_text_moderngl(world, camera)
+        
     
     def _draw_crosshair_moderngl(self):
         """Draw crosshair using ModernGL"""
@@ -614,31 +615,171 @@ class GPURenderer:
         self.ctx.enable(mgl.DEPTH_TEST)
 
     def _draw_ui_text_moderngl(self, world: World, camera: Camera):
-        """Draw UI text using ModernGL (simplified for now)"""
-        # For now, we'll use pygame surfaces and upload as textures
-        # This is a simplified approach - a full implementation would use
-        # bitmap fonts or text rendering shaders
+        """Draw UI text using ModernGL with texture-based text rendering"""
         try:
             from .font_manager import get_font_manager
             font_mgr = get_font_manager()
             
+            # Disable depth testing for UI rendering
+            self.ctx.disable(mgl.DEPTH_TEST)
+            self.ctx.enable(mgl.BLEND)
+            self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
+            
+            # Set up orthographic projection for UI
+            ortho_matrix = np.array([
+                [2.0 / self.screen_width, 0, 0, -1],
+                [0, -2.0 / self.screen_height, 0, 1],
+                [0, 0, -1, 0],
+                [0, 0, 0, 1]
+            ], dtype=np.float32)
+            
+            # Create text shader if not exists
+            if not hasattr(self, 'text_shader'):
+                self._create_text_shader()
+            
+            # Render debug text at top-left
+            pos = camera.position
+            debug_text = f"Position: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
+            self._render_text_texture(debug_text, 10, 10, font_size=24, color=(255, 255, 255))
+            
+            # Render additional info
+            fps_text = f"FPS: {1000.0 / max(self.last_stats['render_time_ms'], 1):.1f}"
+            self._render_text_texture(fps_text, 10, 40, font_size=24, color=(255, 255, 0))
+            
+            blocks_text = f"Blocks: {self.last_stats['blocks']}"
+            self._render_text_texture(blocks_text, 10, 70, font_size=24, color=(0, 255, 255))
+            
+            # Re-enable depth testing
+            self.ctx.disable(mgl.BLEND)
+            self.ctx.enable(mgl.DEPTH_TEST)
+            
+        except Exception as e:
+            # Fallback to console output if texture rendering fails
             pos = camera.position
             debug_text = f"Position: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}) | " + \
                         f"Pitch: {camera.pitch:.1f}, Yaw: {camera.yaw:.1f} | " + \
                         f"Blocks: {self.last_stats['blocks']} | " + \
                         f"FPS: {1000.0 / max(self.last_stats['render_time_ms'], 1):.1f}"
             
-            # For now, print to console instead of rendering to screen
-            # TODO: Implement proper text rendering with ModernGL
             if hasattr(self, '_last_debug_print_time'):
-                if time.time() - self._last_debug_print_time > 1.0:  # Print once per second
+                if time.time() - self._last_debug_print_time > 1.0:
                     print(f"\r{debug_text}", end='')
                     self._last_debug_print_time = time.time()
             else:
                 self._last_debug_print_time = time.time()
+
+    def _create_text_shader(self):
+        """Create shader program for text rendering"""
+        text_vertex_shader = '''
+        #version 330 core
+        
+        layout(location = 0) in vec2 position;
+        layout(location = 1) in vec2 texcoord;
+        
+        uniform mat4 ortho_matrix;
+        
+        out vec2 uv;
+        
+        void main() {
+            gl_Position = ortho_matrix * vec4(position, 0.0, 1.0);
+            uv = texcoord;
+        }
+        '''
+        
+        text_fragment_shader = '''
+        #version 330 core
+        
+        in vec2 uv;
+        uniform sampler2D text_texture;
+        uniform vec3 text_color;
+        
+        out vec4 fragColor;
+        
+        void main() {
+            vec4 sampled = texture(text_texture, uv);
+            fragColor = vec4(text_color, sampled.a);
+        }
+        '''
+        
+        self.text_shader = self.ctx.program(
+            vertex_shader=text_vertex_shader,
+            fragment_shader=text_fragment_shader
+        )
+
+    def _render_text_texture(self, text: str, x: int, y: int, font_size: int = 24, color: tuple = (255, 255, 255)):
+        """Render text as texture using ModernGL (based on example_pygame_text.py)"""
+        try:
+            from .font_manager import get_font_manager
+            font_mgr = get_font_manager()
+            
+            # Create pygame surface with text
+            font = font_mgr.get_font(font_size)
+            img = font.render(text, True, color)
+            w, h = img.get_size()
+            
+            if w == 0 or h == 0:
+                return
+            
+            # Generate texture
+            texture = self.ctx.texture((w, h), 4)  # RGBA format
+            texture.filter = (mgl.NEAREST, mgl.NEAREST)
+            
+            # Convert pygame surface to texture data
+            data = pygame.image.tostring(img, "RGBA", True)  # Flip vertically
+            texture.write(data)
+            
+            # Create quad vertices for text rendering
+            vertices = np.array([
+                # Position  # TexCoords
+                x,     y,     0.0, 1.0,  # Top-left
+                x + w, y,     1.0, 1.0,  # Top-right
+                x + w, y + h, 1.0, 0.0,  # Bottom-right
+                x,     y + h, 0.0, 0.0,  # Bottom-left
+            ], dtype=np.float32)
+            
+            indices = np.array([
+                0, 1, 2,  # First triangle
+                0, 2, 3   # Second triangle
+            ], dtype=np.uint32)
+            
+            # Create buffers
+            vbo = self.ctx.buffer(vertices.tobytes())
+            ibo = self.ctx.buffer(indices.tobytes())
+            
+            # Set up orthographic projection
+            ortho_matrix = np.array([
+                [2.0 / self.screen_width, 0, 0, -1],
+                [0, -2.0 / self.screen_height, 0, 1],
+                [0, 0, -1, 0],
+                [0, 0, 0, 1]
+            ], dtype=np.float32)
+            
+            # Use text shader and set uniforms
+            self.text_shader['ortho_matrix'].write(ortho_matrix.T.astype(np.float32).tobytes())
+            self.text_shader['text_color'].write(np.array([c/255.0 for c in color[:3]], dtype=np.float32).tobytes())
+            
+            # Bind texture
+            texture.use(0)
+            self.text_shader['text_texture'].value = 0
+            
+            # Create VAO and render
+            vao = self.ctx.vertex_array(
+                self.text_shader,
+                [(vbo, '2f 2f', 'position', 'texcoord')],
+                ibo
+            )
+            
+            vao.render()
+            
+            # Cleanup
+            vao.release()
+            vbo.release()
+            ibo.release()
+            texture.release()
             
         except Exception as e:
-            pass  # Silently fail for UI rendering
+            print(f"Text rendering error: {e}")
+            pass
 
     def _format_debug_line(self, key: str, value, format_type: str = 'default') -> str:
         """Cache formatted debug strings to reduce string operations"""
@@ -659,10 +800,62 @@ class GPURenderer:
 
     # Called by GameEngine when F3 debug mode is enabled
     def draw_debug_info(self, data: Dict):
-        """Draw debug info using ModernGL (simplified console output for now)"""
+        """Draw debug info using ModernGL texture-based text rendering"""
         try:
-            # For now, use console output instead of screen rendering
-            # TODO: Implement proper text rendering with ModernGL
+            # Disable depth testing for UI rendering
+            self.ctx.disable(mgl.DEPTH_TEST)
+            self.ctx.enable(mgl.BLEND)
+            self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
+            
+            # Create text shader if not exists
+            if not hasattr(self, 'text_shader'):
+                self._create_text_shader()
+            
+            # Render debug information on screen
+            y_offset = 10
+            line_height = 25
+            
+            # FPS
+            fps_text = self._format_debug_line('fps', data.get('fps', 0), 'fps')
+            self._render_text_texture(fps_text, 10, y_offset, font_size=20, color=(255, 255, 0))
+            y_offset += line_height
+            
+            # Position
+            pos = data.get('position', (0, 0, 0))
+            pos_text = f"Position: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
+            self._render_text_texture(pos_text, 10, y_offset, font_size=20, color=(255, 255, 255))
+            y_offset += line_height
+            
+            # Chunk info
+            chunk_text = self._format_debug_line('chunk', data.get('chunk', (0,0)), 'chunk')
+            self._render_text_texture(chunk_text, 10, y_offset, font_size=20, color=(255, 255, 255))
+            y_offset += line_height
+            
+            # Chunks loaded
+            chunks_text = self._format_debug_line('chunks_loaded', data.get('chunks_loaded', 0), 'chunks_loaded')
+            self._render_text_texture(chunks_text, 10, y_offset, font_size=20, color=(255, 255, 255))
+            y_offset += line_height
+            
+            # Selected block
+            block_text = self._format_debug_line('selected_block', data.get('selected_block', ''), 'selected_block')
+            self._render_text_texture(block_text, 10, y_offset, font_size=20, color=(255, 255, 255))
+            y_offset += line_height
+            
+            # Performance mode
+            perf_text = self._format_debug_line('performance', data.get('performance_mode'), 'performance')
+            self._render_text_texture(perf_text, 10, y_offset, font_size=20, color=(255, 255, 255))
+            y_offset += line_height
+            
+            # Block and face count
+            stats_text = self._format_debug_line('blocks_faces', self.last_stats, 'blocks_faces')
+            self._render_text_texture(stats_text, 10, y_offset, font_size=20, color=(0, 255, 255))
+            
+            # Re-enable depth testing
+            self.ctx.disable(mgl.BLEND)
+            self.ctx.enable(mgl.DEPTH_TEST)
+            
+        except Exception as e:
+            # Fallback to console output if texture rendering fails
             debug_lines = [
                 self._format_debug_line('fps', data.get('fps', 0), 'fps'),
                 self._format_debug_line('chunk', data.get('chunk', (0,0)), 'chunk'),
@@ -679,9 +872,6 @@ class GPURenderer:
                     self._last_debug_time = time.time()
             else:
                 self._last_debug_time = time.time()
-            
-        except Exception as e:
-            pass  # Silently fail for debug rendering
 
 # Factory function to create the best available renderer
 def create_best_renderer(screen_width: int, screen_height: int):

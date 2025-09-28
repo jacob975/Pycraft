@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pycraft Launcher - Choose rendering mode
+Pycraft Launcher - Choose rendering mode with ModernGL support
 """
 
 import sys
@@ -10,13 +10,14 @@ from game.engine import GameEngine
 from game.menu import show_main_menu
 
 def main():
-    parser = argparse.ArgumentParser(description='Pycraft - Minecraft-like Game')
+    parser = argparse.ArgumentParser(description='Pycraft - Minecraft-like Game with GPU Acceleration')
     parser.add_argument('--width', type=int, default=1024, 
                        help='Window width (default: 1024)')
     parser.add_argument('--height', type=int, default=768, 
                        help='Window height (default: 768)')
-    parser.add_argument('--skip-menu', action='store_true',
-                       help='Skip main menu and start game directly')
+    parser.add_argument('--menu-mode', choices=['auto', 'moderngl', 'pygame'], 
+                       default='auto',
+                       help='Menu rendering mode: auto (try ModernGL first), moderngl (force GPU), pygame (force CPU)')
     
     args = parser.parse_args()
         
@@ -25,34 +26,36 @@ def main():
         pygame.init()
         pygame.font.init()
         
-        if args.skip_menu:
-            # Skip menu and start game directly
-            print("跳過主選單，直接開始遊戲...")
+        print(f"🎮 Pycraft Launcher - {args.width}x{args.height}")
+        print(f"🎨 Menu mode: {args.menu_mode}")
+        # Show main menu with specified mode
+        if args.menu_mode == 'moderngl':
+            print("🚀 Forcing ModernGL GPU menu...")
+            selected_option = show_main_menu(args.width, args.height, prefer_moderngl=True)
+        elif args.menu_mode == 'pygame':
+            print("📱 Forcing standard pygame menu...")
+            selected_option = show_main_menu(args.width, args.height, prefer_moderngl=False)
+        else:  # auto mode
+            print("🎯 Auto-selecting best available menu system...")
+            selected_option = show_main_menu(args.width, args.height, prefer_moderngl=True)
+        
+        # Handle menu selection
+        if selected_option == 'exit' or selected_option is None:
+            print("👋 Exiting Pycraft. Thanks for playing!")
+            return
+        
+        elif selected_option == 'new_world':
+            print("🌍 Starting new world...")
             engine = GameEngine(width=args.width, height=args.height, use_gpu=True)
             engine.run()
-        else:
-            # Show main menu first
-            screen = pygame.display.set_mode((args.width, args.height))
-            selected_option = show_main_menu(width=args.width, height=args.height, screen=screen)
             
-            if selected_option == 'exit' or selected_option is None:
-                print("退出 Pycraft。感謝遊玩!")
-                return
-            
-            elif selected_option == 'new_world':
-                print("開始新世界...")
-                # Reuse the same pygame context and screen
-                engine = GameEngine(width=args.width, height=args.height, use_gpu=True, screen=screen)
-                engine.run()
-                
-            elif selected_option == 'load_world':
-                print("載入世界功能尚未實作。")
-                print("改為開始新世界...")
-                # Reuse the same pygame context and screen
-                engine = GameEngine(width=args.width, height=args.height, use_gpu=True, screen=screen)
-                engine.run()
+        elif selected_option == 'load_world':
+            print("📁 Load world feature not implemented yet.")
+            print("🔄 Starting new world instead...")
+            engine = GameEngine(width=args.width, height=args.height, use_gpu=True)
+            engine.run()
     except Exception as e:
-        print(f"遊戲啟動失敗: {e}")
+        print(f"❌ Game startup failed: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
