@@ -22,10 +22,11 @@ except ImportError as e:
 class GameEngine:
     """Main game engine handling the game loop and coordination"""
     
-    def __init__(self, width: int = 1024, height: int = 768, use_gpu: bool = True):
-        # Initialize Pygame
-        pygame.init()
-        pygame.font.init()
+    def __init__(self, width: int = 1024, height: int = 768, use_gpu: bool = True, screen: pygame.Surface = None):
+        # Initialize Pygame if not already done
+        if not pygame.get_init():
+            pygame.init()
+            pygame.font.init()
         
         self.width = width
         self.height = height
@@ -33,12 +34,15 @@ class GameEngine:
         self.clock = pygame.time.Clock()
         self.use_gpu = use_gpu and GPU_AVAILABLE
         
+        # Store screen reference for potential reuse
+        self.external_screen = screen
+        
         # Initialize game components
         self.world = World(use_multiprocessing=True)
         
         # Choose renderer based on availability and preference
         if self.use_gpu:
-            self.renderer = GPURenderer(width, height)
+            self.renderer = GPURenderer(width, height, self.external_screen)
             print("使用GPU渲染器 - OpenGL硬體加速")
         else:
             raise NotImplementedError("CPU渲染器尚未實作")

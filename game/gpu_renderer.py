@@ -25,7 +25,6 @@ import numpy as np
 from itertools import compress
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing as mp
-from functools import lru_cache
 
 from .world import World, Chunk
 from .camera import Camera
@@ -83,9 +82,10 @@ def check_occlusion_batch(positions: np.ndarray, neighbor_data: np.ndarray) -> n
 class GPURenderer:
     """Modern GPU renderer using ModernGL for all rendering operations."""
 
-    def __init__(self, screen_width: int, screen_height: int):
+    def __init__(self, screen_width: int, screen_height: int, existing_screen: pygame.Surface = None):
         self.screen_width = screen_width
         self.screen_height = screen_height
+        self.existing_screen = existing_screen
         
         # Initialize ModernGL rendering pipeline
         self._init_moderngl_context()
@@ -325,12 +325,20 @@ class GPURenderer:
     
     def _init_moderngl_context(self):
         """Initialize ModernGL context and pygame window"""
-        # Create OpenGL-enabled window for ModernGL with proper depth buffer
-        flags = pygame.OPENGL | pygame.DOUBLEBUF
-        # Request depth buffer
-        pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
-        self.screen = pygame.display.set_mode((self.screen_width, self.screen_height), flags)
-        pygame.display.set_caption("Pycraft - ModernGL GPU Renderer")
+        if self.existing_screen is not None:
+            # Reuse existing pygame screen but switch to OpenGL mode
+            # We need to recreate the surface with OpenGL flags
+            flags = pygame.OPENGL | pygame.DOUBLEBUF
+            pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
+            self.screen = pygame.display.set_mode((self.screen_width, self.screen_height), flags)
+            pygame.display.set_caption("Pycraft - ModernGL GPU Renderer")
+        else:
+            # Create OpenGL-enabled window for ModernGL with proper depth buffer
+            flags = pygame.OPENGL | pygame.DOUBLEBUF
+            # Request depth buffer
+            pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
+            self.screen = pygame.display.set_mode((self.screen_width, self.screen_height), flags)
+            pygame.display.set_caption("Pycraft - ModernGL GPU Renderer")
         
         # Create ModernGL context
         self.ctx = mgl.create_context()
@@ -632,7 +640,6 @@ class GPURenderer:
         except Exception as e:
             pass  # Silently fail for UI rendering
 
-    #@lru_cache(maxsize=128)  # Small cache for debug strings
     def _format_debug_line(self, key: str, value, format_type: str = 'default') -> str:
         """Cache formatted debug strings to reduce string operations"""
         if format_type == 'fps':
