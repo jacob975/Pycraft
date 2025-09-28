@@ -135,55 +135,23 @@ class GameEngine:
     
     def draw_debug_info(self):
         """Draw debug information"""
-        # Check if renderer supports debug info drawing
-        if hasattr(self.renderer, 'draw_debug_info'):
-            # Let the renderer handle debug info (for GPU renderer)
-            pos = self.player.camera.position
-            chunk_x, chunk_z = self.world.get_chunk_coords(int(pos[0]), int(pos[2]))
-            chunks_loaded = len(self.world.chunks)
-            fps = self.clock.get_fps()
-            block_name = self.player.selected_block.name
-            
-            debug_data = {
-                'fps': fps,
-                'position': pos,
-                'chunk': (chunk_x, chunk_z),
-                'chunks_loaded': chunks_loaded,
-                'selected_block': block_name,
-                'performance_mode': self.performance_mode,
-            }
-            
-            self.renderer.draw_debug_info(debug_data)
-            
-        elif hasattr(self.renderer, 'screen'):
-            # Legacy CPU renderer with screen attribute
-            from .font_manager import get_font_manager
-            font_mgr = get_font_manager()
-            
-            # FPS
-            fps = self.clock.get_fps()
-            fps_text = f"FPS: {fps:.1f}"
-            text_surface = font_mgr.render_text(fps_text, size=24, color=(255, 255, 0))
-            self.renderer.screen.blit(text_surface, (self.width - 100, 10))
-            
-            # Chunk info
-            pos = self.player.camera.position
-            chunk_x, chunk_z = self.world.get_chunk_coords(int(pos[0]), int(pos[2]))
-            chunk_text = f"區塊: ({chunk_x}, {chunk_z})"
-            text_surface = font_mgr.render_text(chunk_text, size=24, color=(255, 255, 0))
-            self.renderer.screen.blit(text_surface, (self.width - 150, 35))
-            
-            # Performance info
-            chunks_loaded = len(self.world.chunks)
-            perf_text = f"已載入: {chunks_loaded}"
-            text_surface = font_mgr.render_text(perf_text, size=24, color=(255, 255, 0))
-            self.renderer.screen.blit(text_surface, (self.width - 120, 60))
-            
-            # Selected block
-            block_name = self.player.selected_block.name
-            block_text = f"方塊: {block_name}"
-            text_surface = font_mgr.render_text(block_text, size=24, color=(255, 255, 0))
-            self.renderer.screen.blit(text_surface, (self.width - 120, 85))
+        # Let the renderer handle debug info (for GPU renderer)
+        pos = self.player.camera.position
+        chunk_x, chunk_z = self.world.get_chunk_coords(int(pos[0]), int(pos[2]))
+        chunks_loaded = len(self.world.chunks)
+        fps = self.clock.get_fps()
+        block_name = self.player.selected_block.name
+        
+        debug_data = {
+            'fps': fps,
+            'position': pos,
+            'chunk': (chunk_x, chunk_z),
+            'chunks_loaded': chunks_loaded,
+            'selected_block': block_name,
+            'performance_mode': self.performance_mode,
+        }
+        
+        self.renderer.draw_debug_info(debug_data)
 
     # --------------------------------------------------------------
     # Ephemeral message overlay helpers
