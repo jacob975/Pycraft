@@ -445,18 +445,13 @@ class GPURenderer:
         
         # Get visible chunks using optimized culling
         visible_chunks = self._get_optimized_visible_chunks(world, camera, render_distance)
-        st1 = time.time()
         # Batch process all blocks using NumPy
-        block_data = self._prepare_block_data(visible_chunks, camera, max_blocks, render_distance)
-        st2 = time.time()
+        block_data = self._prepare_block_data(visible_chunks, camera, max_blocks)
         if len(block_data['positions']) > 0:
             self._render_blocks_moderngl(block_data, camera)
         # Render UI elements
-        st3 = time.time()
         self._render_ui_moderngl(world, camera)
-        st4 = time.time()
         # Update performance stats
-        print(f"Chunk culling: {(st1 - start_time)*1000:.2f} ms, Block prep: {(st2 - st1)*1000:.2f} ms, Block render: {(st3 - st2)*1000:.2f} ms, UI render: {(st4 - st3)*1000:.2f} ms")
         render_time = (time.time() - start_time) * 1000
         self.last_stats['render_time_ms'] = render_time
         self.last_stats['frames_rendered'] += 1
@@ -503,7 +498,7 @@ class GPURenderer:
         self.last_stats['faces'] = len(block_data['positions']) * 6  # 6 faces per block
         self.last_stats['blocks'] = len(block_data['positions'])
     
-    def _prepare_block_data(self, chunks: List[Chunk], camera: Camera, max_blocks: int, render_distance: int = 2) -> Dict:
+    def _prepare_block_data(self, chunks: List[Chunk], camera: Camera, max_blocks: int) -> Dict:
         """Ultra-optimized batch processing for 10k+ blocks using NumPy arrays"""
         if not chunks:
             return {'positions': np.array([]), 'colors': np.array([]), 'types': np.array([])}
@@ -531,9 +526,9 @@ class GPURenderer:
 
         # Efficiently concatenate all arrays
         if all_positions:
-            final_positions = np.concatenate(all_positions, axis=0)
-            final_colors = np.concatenate(all_colors, axis=0)
-            final_types = np.concatenate(all_types, axis=0)
+            final_positions = np.concatenate(all_positions, axis=0)[:max_blocks]
+            final_colors = np.concatenate(all_colors, axis=0)[:max_blocks]
+            final_types = np.concatenate(all_types, axis=0)[:max_blocks]
         else:
             final_positions = np.empty((0, 3), dtype=np.float32)
             final_colors = np.empty((0, 3), dtype=np.float32)
@@ -552,13 +547,10 @@ class GPURenderer:
 
     def _get_optimized_visible_chunks(self, world: World, camera: Camera, render_distance: int) -> List[Chunk]:
         # Get chunks with distance-based culling
-        visible_chunks = world.get_visible_chunks(
+        return world.get_visible_chunks(
             int(camera.position[0]), int(camera.position[2]), 
             render_distance=render_distance
         )
-        # Exclude the chunks that is not visible in camera
-        # TODO
-        return visible_chunks
 
     def _render_ui_moderngl(self, world: World, camera: Camera):
         """Render UI elements using ModernGL"""

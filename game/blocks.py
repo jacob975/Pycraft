@@ -17,12 +17,12 @@ class Block:
     """Represents a single block in the world"""
     _COLORS = {
         BlockType.AIR: (0, 0, 0),
-        BlockType.GRASS: (34, 139, 34),
-        BlockType.DIRT: (139, 69, 19),
-        BlockType.STONE: (128, 128, 128),
-        BlockType.WOOD: (160, 82, 45),
+        BlockType.GRASS: (34/255, 139/255, 34/255),
+        BlockType.DIRT: (139/255, 69/255, 19/255),
+        BlockType.STONE: (128/255, 128/255, 128/255),
+        BlockType.WOOD: (160/255, 82/255, 45/255),
     }
-    _DEFAULT_COLOR = (255, 255, 255)
+    _DEFAULT_COLOR = (1, 1, 1)
     
     def __init__(self, block_type: BlockType = BlockType.AIR):
         self.type = block_type

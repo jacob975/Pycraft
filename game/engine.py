@@ -7,7 +7,6 @@ import sys
 import time
 from .world import World
 from .player import Player
-from .renderer import Renderer
 from .blocks import BlockType
 
 # Try to import GPU renderer
@@ -35,15 +34,14 @@ class GameEngine:
         self.use_gpu = use_gpu and GPU_AVAILABLE
         
         # Initialize game components
-        self.world = World()
+        self.world = World(use_multiprocessing=True)
         
         # Choose renderer based on availability and preference
         if self.use_gpu:
             self.renderer = GPURenderer(width, height)
             print("使用GPU渲染器 - OpenGL硬體加速")
         else:
-            self.renderer = Renderer(width, height)
-            print("使用CPU渲染器 - 軟體渲染")
+            raise NotImplementedError("CPU渲染器尚未實作")
         # Find a good spawn position at ground level
         spawn_x, spawn_z = 8, 8
         ground_y = 30  # Start with a reasonable height
@@ -146,7 +144,8 @@ class GameEngine:
                 'chunk': (chunk_x, chunk_z),
                 'chunks_loaded': chunks_loaded,
                 'selected_block': block_name,
-                'performance_mode': self.performance_mode
+                'performance_mode': self.performance_mode,
+                'async_stats': self.world.get_async_stats() if hasattr(self.world, 'get_async_stats') else {}
             }
             
             self.renderer.draw_debug_info(debug_data)

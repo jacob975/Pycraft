@@ -7,6 +7,7 @@ import math
 import random
 from typing import Dict, Tuple, Optional, List
 import numpy as np
+import time
 try:
     import noise
 except ImportError:
@@ -52,7 +53,8 @@ class Chunk:
         # Return cached result if available and valid
         if not self._cache_dirty and self._visible_faces_cache is not None:
             return self._visible_faces_cache
-
+        st = time.time()
+        
         # Pre-allocate lists for better performance
         positions = []
         colors = []
@@ -72,13 +74,7 @@ class Chunk:
         ])
         
         # Pre-compute block colors to avoid repeated object creation
-        color_cache = {
-            BlockType.GRASS: np.array([34/255.0, 139/255.0, 34/255.0], dtype=np.float32),
-            BlockType.DIRT: np.array([139/255.0, 69/255.0, 19/255.0], dtype=np.float32),
-            BlockType.STONE: np.array([128/255.0, 128/255.0, 128/255.0], dtype=np.float32),
-            BlockType.WOOD: np.array([160/255.0, 82/255.0, 45/255.0], dtype=np.float32),
-            BlockType.AIR: np.array([0.0, 0.0, 0.0], dtype=np.float32)  # Should not be used
-        }
+        color_cache = Block._COLORS
         
         # Iterate through all solid blocks in this chunk
         for (x, y, z), block in self.blocks.items():
@@ -123,7 +119,7 @@ class Chunk:
         # Cache the result
         self._visible_faces_cache = result
         self._cache_dirty = False
-
+        print(f"Chunk ({self.x}, {self.z}) visible faces computed in {time.time() - st:.3f}s, {len(positions)} blocks")
         return result
 
     def generate_terrain(self):
@@ -252,7 +248,7 @@ class Chunk:
 class World:
     """Game world containing chunks and blocks"""
     
-    def __init__(self, seed: int = None):
+    def __init__(self, seed: int = None, use_multiprocessing: bool = True):
         self.chunks: Dict[Tuple[int, int], Chunk] = {}
         self.seed = seed or random.randint(0, 1000000)
         random.seed(self.seed)
@@ -347,5 +343,4 @@ class World:
 
         # Extract sorted chunks
         visible_chunks = [chunk for chunk, _ in chunk_distance_pairs]
-        
         return visible_chunks
