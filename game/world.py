@@ -2,9 +2,11 @@
 World generation and management for Pycraft
 """
 
+import chunk
 import math
 import random
 from typing import Dict, Tuple, Optional, List
+import numpy as np
 try:
     import noise
 except ImportError:
@@ -22,6 +24,10 @@ class Chunk:
         self.z = z
         self.blocks: Dict[Tuple[int, int, int], Block] = {}  # to store only non-air blocks
         self.generated = False
+
+        # Cache for visible faces to improve performance
+        self._visible_faces_cache = None
+        self._cache_dirty = True
     
     def get_block(self, x: int, y: int, z: int) -> Block:
         """Get block at local coordinates"""
@@ -37,7 +43,89 @@ class Chunk:
                 del self.blocks[pos]
         else:
             self.blocks[pos] = Block(block_type)
-    
+        
+        # Invalidate visible blocks cache when blocks change
+        self._cache_dirty = True
+
+    def get_visible_faces(self) -> Dict[str, np.ndarray]:
+        """Get optimized arrays of visible block data for rendering (cached)"""
+        # Return cached result if available and valid
+        if not self._cache_dirty and self._visible_faces_cache is not None:
+            return self._visible_faces_cache
+
+        # Pre-allocate lists for better performance
+        positions = []
+        colors = []
+        block_types = []
+        
+        chunk_world_x = self.x * self.SIZE
+        chunk_world_z = self.z * self.SIZE
+        
+        # Pre-compute direction vectors for neighbor checking
+        directions = np.array([
+            (0, 0, -1),  # north
+            (0, 0, 1),   # south  
+            (1, 0, 0),   # east
+            (-1, 0, 0),  # west
+            (0, 1, 0),   # up
+            (0, -1, 0)   # down
+        ])
+        
+        # Pre-compute block colors to avoid repeated object creation
+        color_cache = {
+            BlockType.GRASS: np.array([34/255.0, 139/255.0, 34/255.0], dtype=np.float32),
+            BlockType.DIRT: np.array([139/255.0, 69/255.0, 19/255.0], dtype=np.float32),
+            BlockType.STONE: np.array([128/255.0, 128/255.0, 128/255.0], dtype=np.float32),
+            BlockType.WOOD: np.array([160/255.0, 82/255.0, 45/255.0], dtype=np.float32),
+            BlockType.AIR: np.array([0.0, 0.0, 0.0], dtype=np.float32)  # Should not be used
+        }
+        
+        # Iterate through all solid blocks in this chunk
+        for (x, y, z), block in self.blocks.items():
+            if not block.is_solid():
+                continue
+            
+            # Check if any face is visible (not blocked by adjacent solid block)
+            has_visible_face = False
+            
+            for dx, dy, dz in directions:
+                neighbor_x, neighbor_y, neighbor_z = x + dx, y + dy, z + dz
+                
+                # Check if neighbor position is within chunk bounds
+                if (0 <= neighbor_x < self.SIZE and 
+                    0 <= neighbor_y < 256 and  # World height limit
+                    0 <= neighbor_z < self.SIZE):
+                    # Get the neighboring block within this chunk
+                    neighbor_block = self.get_block(neighbor_x, neighbor_y, neighbor_z)
+                else:
+                    # If neighbor is outside chunk bounds, assume it's air (visible face)
+                    neighbor_block = Block(BlockType.AIR)
+                
+                # Face is visible if neighboring block is not solid
+                if not neighbor_block.is_solid():
+                    has_visible_face = True
+                    break  # Found at least one visible face, that's enough
+            
+            # Only add block if it has at least one visible face
+            if has_visible_face:
+                world_pos = (x + chunk_world_x, y, z + chunk_world_z)
+                positions.append(world_pos)
+                colors.append(color_cache.get(block.type, color_cache[BlockType.STONE]))
+                block_types.append(block.type)
+        
+        # Convert to optimized NumPy arrays
+        result = {
+            'positions': np.array(positions, dtype=np.float32) if positions else np.empty((0, 3), dtype=np.float32),
+            'colors': np.array(colors, dtype=np.float32) if colors else np.empty((0, 3), dtype=np.float32),
+            'types': np.array(block_types, dtype=object) if block_types else np.empty(0, dtype=object)
+        }
+        
+        # Cache the result
+        self._visible_faces_cache = result
+        self._cache_dirty = False
+
+        return result
+
     def generate_terrain(self):
         """Generate terrain for this chunk"""
         if self.generated:
@@ -87,6 +175,8 @@ class Chunk:
         
         # print(f"Generated {blocks_generated} blocks in chunk ({self.x}, {self.z})")
         self.generated = True
+        # Mark cache as dirty after terrain generation
+        self._cache_dirty = True
     
     def _get_height_at(self, world_x: int, world_z: int) -> int:
         """Get terrain height at world coordinates"""

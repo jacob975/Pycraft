@@ -441,13 +441,13 @@ class GPURenderer:
         
         # Determine render limits based on performance mode 
         max_blocks = 40960 if performance_mode else 81920
-        render_distance = 4
+        render_distance = 8
         
         # Get visible chunks using optimized culling
         visible_chunks = self._get_optimized_visible_chunks(world, camera, render_distance)
         st1 = time.time()
         # Batch process all blocks using NumPy
-        block_data = self._prepare_block_data_batch(visible_chunks, camera, max_blocks, render_distance)
+        block_data = self._prepare_block_data(visible_chunks, camera, max_blocks, render_distance)
         st2 = time.time()
         if len(block_data['positions']) > 0:
             self._render_blocks_moderngl(block_data, camera)
@@ -456,7 +456,7 @@ class GPURenderer:
         self._render_ui_moderngl(world, camera)
         st4 = time.time()
         # Update performance stats
-        #print(f"Chunk culling: {(st1 - start_time)*1000:.2f} ms, Block prep: {(st2 - st1)*1000:.2f} ms, Block render: {(st3 - st2)*1000:.2f} ms, UI render: {(st4 - st3)*1000:.2f} ms")
+        print(f"Chunk culling: {(st1 - start_time)*1000:.2f} ms, Block prep: {(st2 - st1)*1000:.2f} ms, Block render: {(st3 - st2)*1000:.2f} ms, UI render: {(st4 - st3)*1000:.2f} ms")
         render_time = (time.time() - start_time) * 1000
         self.last_stats['render_time_ms'] = render_time
         self.last_stats['frames_rendered'] += 1
@@ -502,160 +502,52 @@ class GPURenderer:
         
         self.last_stats['faces'] = len(block_data['positions']) * 6  # 6 faces per block
         self.last_stats['blocks'] = len(block_data['positions'])
-
-    def _render_test_cube(self, camera: Camera):
-        """Render a single test cube at a fixed position to debug geometry"""
-        # Only render if we're close to spawn
-        if np.linalg.norm(np.array(camera.position) - np.array([8, 30, 8])) > 20:
-            return
-            
-        # Prepare matrices
-        view_matrix = self._create_view_matrix(camera)
-        
-        # Set uniforms
-        self.block_shader['projection_matrix'].write(self.projection_matrix.T.astype(np.float32).tobytes())
-        self.block_shader['view_matrix'].write(view_matrix.T.astype(np.float32).tobytes())
-        self.block_shader['light_dir'].write(np.array([0.2, -1.0, 0.3], dtype=np.float32).tobytes())
-        self.block_shader['camera_pos'].write(np.array(camera.position, dtype=np.float32).tobytes())
-        self.block_shader['fog_color'].write(np.array([0.529, 0.808, 0.922], dtype=np.float32).tobytes())
-        
-        # Create a single test cube at position (10, 25, 10) - should be visible and below camera
-        test_position = np.array([[10.0, 25.0, 10.0]], dtype=np.float32)  
-        test_color = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)  # Bright red for visibility
-        
-        # Create instance data buffer
-        instance_data = np.column_stack([test_position, test_color]).astype(np.float32)
-        instance_buffer = self.ctx.buffer(instance_data.tobytes())
-        
-        # Create vertex array object
-        vertex_attributes = [
-            (self.cube_vbo, '3f 3f', 'position', 'normal'),
-            (instance_buffer, '3f 3f/i', 'instance_pos', 'instance_color'),
-        ]
-        
-        vao = self.ctx.vertex_array(self.block_shader, vertex_attributes, self.cube_ibo)
-        
-        # Render the test cube
-        vao.render(instances=1)
-        
-        # Cleanup
-        vao.release()
-        instance_buffer.release()
-
-    def _should_render_block(self, world, x: int, y: int, z: int) -> bool:
-        """Check if a block should be rendered (has at least one exposed face)"""
-        try:
-            # Fast check - only check 4 horizontal neighbors for better performance
-            # Skip expensive vertical neighbor checks unless necessary
-            neighbors = [(x+1, y, z), (x-1, y, z), (x, y, z+1), (x, y, z-1)]
-            
-            for nx, ny, nz in neighbors:
-                neighbor = world.get_block(nx, ny, nz)
-                if not neighbor.is_solid():  # Exposed to air or transparent block
-                    return True
-            
-            # Only check vertical neighbors if all horizontal are solid
-            vertical_neighbors = [(x, y+1, z), (x, y-1, z)]
-            for nx, ny, nz in vertical_neighbors:
-                neighbor = world.get_block(nx, ny, nz)
-                if not neighbor.is_solid():
-                    return True
-                    
-            return False  # Completely surrounded by solid blocks
-        except Exception:
-            # If we can't check neighbors, assume the block should be rendered
-            return True
     
-    def _prepare_block_data_batch(self, chunks: List[Chunk], camera: Camera, max_blocks: int, render_distance: int = 2) -> Dict:
-        """Ultra-optimized batch processing for 10k+ blocks"""
+    def _prepare_block_data(self, chunks: List[Chunk], camera: Camera, max_blocks: int, render_distance: int = 2) -> Dict:
+        """Ultra-optimized batch processing for 10k+ blocks using NumPy arrays"""
         if not chunks:
             return {'positions': np.array([]), 'colors': np.array([]), 'types': np.array([])}
-
-        camera_pos = np.array(camera.position, dtype=np.float32)
-        max_distance_sq = (render_distance * 16 + 16) ** 2
-
-        # Pre-allocate arrays for maximum efficiency
-        positions_buffer = np.zeros((max_blocks, 3), dtype=np.float32)
-        colors_buffer = np.ones((max_blocks, 3), dtype=np.float32)
-
-        block_count = 0
+        
+        # Pre-allocate lists for concatenation
+        all_positions = []
+        all_colors = []
+        all_types = []
+        total_blocks = 0
+        
         # Batch process chunks with minimal object creation
         for chunk in chunks:
-            chunk_world_x = chunk.x * chunk.SIZE
-            chunk_world_z = chunk.z * chunk.SIZE
-
-            # Convert chunk blocks to arrays in one go
             if not chunk.blocks:
                 continue
-
-            # Extract positions and blocks in vectorized operations
-            local_positions = np.array(list(chunk.blocks.keys()), dtype=np.int32)
-            blocks_list = np.array(list(chunk.blocks.values()))
-
-            # Convert to world coordinates (vectorized)
-            world_positions = local_positions.astype(np.float32)
-            world_positions[:, 0] += chunk_world_x
-            world_positions[:, 2] += chunk_world_z
-
-            # Filter solid blocks (vectorized)
-            solid_mask = [block.is_solid() for block in blocks_list]
-            valid_positions = world_positions[solid_mask]
-            valid_blocks = list(compress(blocks_list, solid_mask))
-
-            if len(valid_positions) == 0:
-                continue
             
-            # Vectorized distance calculation
-            y_weight = 16  # Increase this to weight Y distance more heavily
-            distances = np.sum(np.square(valid_positions - camera_pos) * np.array([1.0, y_weight, 1.0]), axis=1)
-            distance_mask = distances <= max_distance_sq
-
-            # Apply distance culling
-            culled_positions = valid_positions[distance_mask]
-            culled_blocks = list(compress(valid_blocks, distance_mask))
-
-            # Add to buffers
-            chunk_count = len(culled_positions)
-            if block_count + chunk_count > max_blocks:
-                # Resize buffers if needed
-                new_size = (block_count + chunk_count) * 2
-                positions_buffer = np.resize(positions_buffer, (new_size, 3))
-                colors_buffer = np.resize(colors_buffer, (new_size, 3))
-
-            # Batch color extraction (vectorized where possible)
-            positions_buffer[block_count:block_count + chunk_count] = culled_positions
-
-            # Vectorized color extraction
-            if culled_blocks:
-                # Extract all colors at once and convert to numpy array
-                colors_list = [block.get_color() for block in culled_blocks]
-                colors_array = np.array(colors_list, dtype=np.float32) / 255.0
-                colors_buffer[block_count:block_count + chunk_count] = colors_array
-
-            block_count += chunk_count
-
-            if block_count >= max_blocks:
-                break
+            # Get optimized visible faces data
+            visible_data = chunk.get_visible_faces()
             
-        if block_count == 0:
-            return {'positions': np.array([]), 'colors': np.array([]), 'types': np.array([])}
+            if len(visible_data['positions']) > 0:
+                all_positions.append(visible_data['positions'])
+                all_colors.append(visible_data['colors'])
+                all_types.append(visible_data['types'])
+            
+            total_blocks += len(chunk.blocks)
 
-        # Trim arrays to actual size
-        final_positions = positions_buffer[:block_count]
-        final_colors = colors_buffer[:block_count]
+        # Efficiently concatenate all arrays
+        if all_positions:
+            final_positions = np.concatenate(all_positions, axis=0)
+            final_colors = np.concatenate(all_colors, axis=0)
+            final_types = np.concatenate(all_types, axis=0)
+        else:
+            final_positions = np.empty((0, 3), dtype=np.float32)
+            final_colors = np.empty((0, 3), dtype=np.float32)
+            final_types = np.empty(0, dtype=object)
 
-        # Final distance-based sorting (if needed)
-        if block_count > max_blocks:
-            final_distances = np.sum((final_positions - camera_pos)**2, axis=1)
-            sort_indices = np.argsort(final_distances)[:max_blocks]
-            final_positions = final_positions[sort_indices]
-            final_colors = final_colors[sort_indices]
-            block_count = max_blocks
+        # Update stats
+        visible_block_count = len(final_positions)
+        self.last_stats['blocks'] = visible_block_count
+        self.last_stats['culled_blocks'] = max(0, total_blocks - visible_block_count)
 
         return {
             'positions': final_positions,
             'colors': final_colors,
-            'types': np.zeros(block_count, dtype=np.int32)
+            'types': final_types
         }
 
     def _get_optimized_visible_chunks(self, world: World, camera: Camera, render_distance: int) -> List[Chunk]:
@@ -667,55 +559,6 @@ class GPURenderer:
         # Exclude the chunks that is not visible in camera
         # TODO
         return visible_chunks
-
-    # ------------------------------------------------------------------
-    @lru_cache(maxsize=65536)  # Reduced size for actual usage pattern
-    def _is_fully_occluded_cached(self, x: int, y: int, z: int) -> bool:
-        """
-        Fast cached occlusion check for static block positions.
-        Cache is cleared when world is modified via clear_occlusion_cache().
-        """
-        return self._is_fully_occluded_internal(x, y, z)
-
-    def _is_fully_occluded_internal(self, x: int, y: int, z: int) -> bool:
-        """Internal occlusion check without caching"""
-        # This will be set by the caller with the world reference
-        world = getattr(self, '_current_world', None)
-        if world is None:
-            return False
-            
-        # Check 6 neighbors; if all solid -> occluded
-        for dx, dy, dz in ((1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)):
-            if not world.get_block(x+dx, y+dy, z+dz).is_solid():
-                return False
-        return True
-
-    # Removed problematic distance caching functions - camera position changes every frame!
-    # Use vectorized NumPy calculations instead for better performance
-
-    def _is_fully_occluded(self, world: World, x: int, y: int, z: int) -> bool:
-        # Set world reference for internal method
-        self._current_world = world
-        
-        # Use simplified caching - caller should clear cache when world changes
-        return self._is_fully_occluded_cached(x, y, z)
-
-    #@lru_cache(maxsize=256)  # Small cache for limited block types
-    def _get_normalized_color(self, block_type: str) -> Tuple[float, float, float]:
-        """Get normalized RGB color for a block type"""
-        # This would need to be implemented based on your block system
-        # For now, return a placeholder that works with existing code
-        from .blocks import BlockType
-        if hasattr(BlockType, block_type):
-            color = getattr(BlockType, block_type).value.get_color()
-        else:
-            color = (128, 128, 128)  # Default gray
-        return tuple(c / 255.0 for c in color)
-    
-    # Removed problematic neighbor caching - world state tracking is insufficient
-    # Direct world.get_block() calls are more reliable and still reasonably fast
-
-
 
     def _render_ui_moderngl(self, world: World, camera: Camera):
         """Render UI elements using ModernGL"""
