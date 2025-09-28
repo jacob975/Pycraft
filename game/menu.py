@@ -63,7 +63,7 @@ class ModernGLButton:
 class ModernGLMenu:
     """High-performance ModernGL-based main menu interface"""
     
-    def __init__(self, width: int = 1024, height: int = 768, screen: pygame.Surface = None):
+    def __init__(self, width: int = SCREEN_WIDTH, height: int = SCREEN_HEIGHT, screen: pygame.Surface = None):
         self.width = width
         self.height = height
         self.running = True
@@ -124,6 +124,10 @@ class ModernGLMenu:
         # Enable features for UI rendering
         self.ctx.enable(mgl.BLEND)
         self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
+
+        # Ensure depth testing is disabled so 2D UI elements render in draw order
+        # (the pause menu shares the GPU context with the 3D renderer, which leaves depth testing on)
+        self.ctx.disable(mgl.DEPTH_TEST)
         
         print("✅ ModernGL context initialized for menu")
     
@@ -383,8 +387,8 @@ class ModernGLMenu:
         
         # Set viewport
         self.ctx.viewport = (0, 0, self.width, self.height)
-        
-        # Render animated background
+
+        # Render background
         self._render_background()
         
         # Render title
@@ -742,6 +746,159 @@ class ModernGLMenu:
         except Exception as e:
             print(f"Cleanup warning: {e}")
 
+class ModernGLPauseMenu(ModernGLMenu):
+    """High-performance ModernGL-based pause menu interface"""
+    
+    def __init__(self, width: int = SCREEN_WIDTH, height: int = SCREEN_HEIGHT, screen: pygame.Surface = None):
+        # Initialize the parent class
+        super().__init__(width, height, screen)
+    
+    def _create_buttons(self):
+        """Create pause menu button objects"""
+        button_width = 250
+        button_height = 50
+        button_spacing = 15
+        start_y = self.height // 2 - 60
+        
+        self.buttons = {
+            'resume': ModernGLButton(
+                self.width // 2 - button_width // 2,
+                start_y,
+                button_width,
+                button_height,
+                "Resume Game",
+                font_size=26,
+                bg_color=(40, 120, 40),
+                hover_color=(60, 140, 60)
+            ),
+            'settings': ModernGLButton(
+                self.width // 2 - button_width // 2,
+                start_y + button_height + button_spacing,
+                button_width,
+                button_height,
+                "Settings",
+                font_size=26,
+                bg_color=(80, 80, 120),
+                hover_color=(100, 100, 140)
+            ),
+            'save_quit': ModernGLButton(
+                self.width // 2 - button_width // 2,
+                start_y + 2 * (button_height + button_spacing),
+                button_width,
+                button_height,
+                "Save & Quit",
+                font_size=26,
+                bg_color=(120, 80, 40),
+                hover_color=(140, 100, 60)
+            ),
+            'main_menu': ModernGLButton(
+                self.width // 2 - button_width // 2,
+                start_y + 3 * (button_height + button_spacing),
+                button_width,
+                button_height,
+                "Exit to Main Menu",
+                font_size=26,
+                bg_color=(120, 40, 40),
+                hover_color=(140, 60, 60)
+            )
+        }
+    
+    def handle_events(self):
+        """Handle pygame events for pause menu"""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.selected_option = 'main_menu'
+                self.running = False
+            
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    # ESC key resumes the game
+                    self.selected_option = 'resume'
+                    self.running = False
+                elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                    # Enter key resumes the game by default
+                    self.selected_option = 'resume'
+                    self.running = False
+            
+            # Handle button events
+            for button_name, button in self.buttons.items():
+                if button.handle_event(event):
+                    self.selected_option = button_name
+                    self.running = False
+    
+    def _render_background(self):
+        return  # Override to skip animated background
+    
+    def _render_title(self):
+        """Render animated title"""
+        try:
+            font_mgr = get_font_manager()
+            title_size = int(64 * self.title_scale)
+            font = font_mgr.get_font(title_size, bold=True)
+            
+            # Render title text
+            title_surface = font.render("PAUSE", True, (255, 255, 255))
+            shadow_surface = font.render("PAUSE", True, (50, 50, 50))
+
+            if title_surface.get_width() == 0:
+                return
+            
+            # Create textures
+            title_texture = self._create_texture_from_surface(title_surface)
+            shadow_texture = self._create_texture_from_surface(shadow_surface)
+            
+            # Calculate position
+            title_x = self.width // 2 - title_surface.get_width() // 2
+            title_y = 100
+            
+            # Render shadow first
+            self._render_texture(
+                shadow_texture, title_x + 3, title_y + 3,
+                title_surface.get_width(), title_surface.get_height(),
+                np.array([1.0, 1.0, 1.0], dtype=np.float32)
+            )
+            
+            # Render title
+            self._render_texture(
+                title_texture, title_x, title_y,
+                title_surface.get_width(), title_surface.get_height(),
+                np.array([1.0, 1.0, 1.0], dtype=np.float32)
+            )
+            
+            title_texture.release()
+            shadow_texture.release()
+            
+        except Exception as e:
+            print(f"Title rendering error: {e}")
+    
+    def _render_subtitle(self):
+        """Render pause menu subtitle"""
+        # Get font manager
+        font_manager = get_font_manager()
+        
+        # Create subtitle text
+        subtitle_font_size = 18
+        subtitle_text = "Press ESC or click Resume to continue"
+        subtitle_surface = font_manager.get_font(subtitle_font_size).render(
+            subtitle_text, True, (180, 180, 180)
+        )
+        
+        # Create texture from surface
+        subtitle_texture = self._create_texture_from_surface(subtitle_surface)
+        
+        # Calculate position
+        subtitle_width = subtitle_surface.get_width()
+        subtitle_height = subtitle_surface.get_height()
+        subtitle_x = (self.width - subtitle_width) // 2
+        subtitle_y = self.height // 4 + 70
+        
+        # Render subtitle
+        subtitle_color = np.array([0.7, 0.7, 0.7], dtype=np.float32)
+        self._render_texture(subtitle_texture, subtitle_x, subtitle_y, subtitle_width, subtitle_height, subtitle_color)
+        
+        # Clean up texture
+        subtitle_texture.release()
+
 def show_main_menu(width: int = 1024, height: int = 768, screen: pygame.Surface = None) -> Optional[str]:
     """Show the main menu and return the selected option with automatic fallback"""
     try:
@@ -760,3 +917,123 @@ def show_main_menu(width: int = 1024, height: int = 768, screen: pygame.Surface 
     except Exception as e:
         print(f"⚠️ ModernGL menu failed: {e}")
         print("📱 Falling back to standard pygame menu")
+
+
+def show_pause_menu(width: int = 1024, height: int = 768, screen: pygame.Surface = None) -> Optional[str]:
+    """Show the pause menu and return the selected option with automatic fallback"""
+    try:
+        print("🚀 Attempting ModernGL GPU-accelerated pause menu...")
+        pause_menu = ModernGLPauseMenu(width, height, screen)
+        return pause_menu.run()
+    except ImportError as e:
+        print(f"⚠️ ModernGL not available for pause menu: {e}")
+        print("📱 Falling back to simple pause menu")
+        return _show_simple_pause_menu(width, height, screen)
+    except RuntimeError as e:
+        if "OpenGL" in str(e):
+            print(f"⚠️ OpenGL context error for pause menu: {e}")
+            print("📱 Falling back to simple pause menu")
+            return _show_simple_pause_menu(width, height, screen)
+        else:
+            raise e
+    except Exception as e:
+        print(f"⚠️ ModernGL pause menu failed: {e}")
+        print("📱 Falling back to simple pause menu")
+        return _show_simple_pause_menu(width, height, screen)
+
+
+def _show_simple_pause_menu(width: int, height: int, screen: pygame.Surface) -> Optional[str]:
+    """Simple fallback pause menu using basic pygame rendering"""
+    if not screen:
+        screen = pygame.display.set_mode((width, height))
+    
+    pygame.font.init()
+    font_large = pygame.font.Font(None, 48)
+    font_medium = pygame.font.Font(None, 32)
+    
+    # Semi-transparent overlay surface
+    overlay = pygame.Surface((width, height))
+    overlay.set_alpha(200)  # Semi-transparent
+    overlay.fill((20, 20, 20))
+    
+    clock = pygame.time.Clock()
+    running = True
+    selected_option = None
+    
+    # Button dimensions
+    button_width = 250
+    button_height = 50
+    button_spacing = 15
+    start_y = height // 2 - 60
+    
+    buttons = [
+        {"text": "Resume Game", "action": "resume", "color": (40, 120, 40)},
+        {"text": "Settings", "action": "settings", "color": (80, 80, 120)},
+        {"text": "Save & Quit", "action": "save_quit", "color": (120, 80, 40)},
+        {"text": "Exit to Main Menu", "action": "main_menu", "color": (120, 40, 40)}
+    ]
+    
+    # Create button rectangles
+    button_rects = []
+    for i, button in enumerate(buttons):
+        rect = pygame.Rect(
+            width // 2 - button_width // 2,
+            start_y + i * (button_height + button_spacing),
+            button_width,
+            button_height
+        )
+        button_rects.append(rect)
+    
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                selected_option = 'main_menu'
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    selected_option = 'resume'
+                    running = False
+                elif event.key == pygame.K_RETURN:
+                    selected_option = 'resume'
+                    running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # Left click
+                    mouse_pos = event.pos
+                    for i, rect in enumerate(button_rects):
+                        if rect.collidepoint(mouse_pos):
+                            selected_option = buttons[i]["action"]
+                            running = False
+        
+        # Render
+        screen.blit(overlay, (0, 0))
+        
+        # Title
+        title_text = font_large.render("GAME PAUSED", True, (255, 255, 255))
+        title_rect = title_text.get_rect(center=(width // 2, height // 4))
+        screen.blit(title_text, title_rect)
+        
+        # Subtitle
+        subtitle_text = font_medium.render("Press ESC or click Resume to continue", True, (180, 180, 180))
+        subtitle_rect = subtitle_text.get_rect(center=(width // 2, height // 4 + 50))
+        screen.blit(subtitle_text, subtitle_rect)
+        
+        # Buttons
+        mouse_pos = pygame.mouse.get_pos()
+        for i, (button, rect) in enumerate(zip(buttons, button_rects)):
+            # Button background
+            color = button["color"]
+            if rect.collidepoint(mouse_pos):
+                color = tuple(min(255, c + 40) for c in color)  # Hover effect
+            
+            pygame.draw.rect(screen, color, rect)
+            pygame.draw.rect(screen, (255, 255, 255), rect, 2)  # Border
+            
+            # Button text
+            button_text = font_medium.render(button["text"], True, (255, 255, 255))
+            text_rect = button_text.get_rect(center=rect.center)
+            screen.blit(button_text, text_rect)
+        
+        pygame.display.flip()
+        clock.tick(60)
+    
+    return selected_option

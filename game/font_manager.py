@@ -5,6 +5,7 @@
 import pygame
 import os
 import sys
+from typing import Dict
 
 try:
     from OpenGL.GL import (
@@ -73,7 +74,7 @@ class FontManager:
             print("警告: 未找到中文字體，將使用默認字體 (中文可能顯示為方塊)")
             self.chinese_font = None
     
-    def get_font(self, size=32, bold=False):
+    def get_font(self, size=32, bold=False) -> pygame.font.Font:
         """獲取字體對象"""
         font_key = (size, bold, self.chinese_font)
         

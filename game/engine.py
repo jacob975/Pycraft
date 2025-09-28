@@ -8,6 +8,7 @@ import time
 from .world import World
 from .player import Player
 from .blocks import BlockType
+from .menu import show_pause_menu
 from config import *
 
 # Try to import GPU renderer
@@ -32,6 +33,7 @@ class GameEngine:
         self.width = width
         self.height = height
         self.running = True
+        self.pause = False
         self.clock = pygame.time.Clock()
         self.use_gpu = use_gpu and GPU_AVAILABLE
         
@@ -92,8 +94,8 @@ class GameEngine:
             
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE and self.startup_time > 1.0:
-                    # Only allow ESC to quit after 1 second to avoid startup issues
-                    self.running = False
+                    # Pause the game and show settings menu
+                    self.pause = not self.pause
                 elif event.key == pygame.K_F3:
                     self.debug_mode = not self.debug_mode
                     self.show_message(f"Debug: {'ON' if self.debug_mode else 'OFF'}")
@@ -124,7 +126,7 @@ class GameEngine:
             self.draw_debug_info()
 
         # Draw ephemeral message if active
-        self.draw_message_overlay()
+        #self.draw_message_overlay()
         
         pygame.display.flip()
         
@@ -190,28 +192,25 @@ class GameEngine:
         self._message_text = text
         self._message_expire = time.time() + duration
 
-    def draw_message_overlay(self):
-        if not self._message_text:
-            return
-        if time.time() > self._message_expire:
-            self._message_text = None
-            return
-        try:
-            from .font_manager import get_font_manager
-            font_mgr = get_font_manager()
-            surf = font_mgr.render_text(self._message_text, size=30, color=(255, 255, 255))
-            # Center top
-            screen = pygame.display.get_surface()
-            if screen:
-                rect = surf.get_rect()
-                rect.centerx = self.width // 2
-                rect.top = 10
-                # Background box
-                bg_rect = rect.inflate(20, 10)
-                pygame.draw.rect(screen, (0, 0, 0, 160), bg_rect)
-                screen.blit(surf, rect)
-        except Exception:
-            pass
+    def show_pause_menu(self):
+        """Show pause menu and handle user input"""
+        # Unlock mouse when showing menu
+        mouse_lock_state = False
+        if self.player.mouse_locked:
+            mouse_lock_state = True
+            self.player.toggle_mouse_lock()
+        selected_option = show_pause_menu(width=self.width, height=self.height, screen=self.renderer.screen)
+        # Restore mouse lock state
+        if mouse_lock_state:
+            self.player.toggle_mouse_lock()
+        
+        if selected_option == 'resume' or selected_option is None:
+            self.pause = False
+            print("繼續遊戲...")
+        elif selected_option == 'exit' or selected_option == 'main_menu':
+            print("退出遊戲...")
+            self.running = False
+            self.pause = False  # Ensure we exit the pause state
     
     def run(self):
         """Main game loop"""
@@ -226,7 +225,7 @@ class GameEngine:
         print("  Tab - 切換滑鼠捕獲")
         print("  F3 - 切換調試信息")
         print("  F4 - 切換性能模式")
-        print("  ESC - 退出遊戲")
+        print("  ESC - 暫停/返回選單")
         print("\n注意: 按Tab鍵啟用滑鼠控制!")
         
         last_time = time.time()
@@ -240,11 +239,14 @@ class GameEngine:
             # Handle events
             self.handle_events()
             
-            # Update game state
-            self.update(dt)
-            
-            # Render
-            self.render()
+            if self.pause:
+                # Show pause menu
+                self.show_pause_menu()
+            else:
+                # Update game state
+                self.update(dt)
+                # Render
+                self.render()
             
             # Control frame rate
             self.clock.tick(self.fps_target)
