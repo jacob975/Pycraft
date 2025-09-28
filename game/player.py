@@ -133,26 +133,27 @@ class Player:
     
     def get_target_block(self, place_mode=False, max_distance=5):
         """Get the position of the block the player is targeting"""
-        start = self.camera.position
+        start = self.camera.position # Eye position
+        print("Camera position:", start)
         direction = self.camera.get_forward_vector()
-        
+        print("Camera direction:", direction)
+
         # Raycast to find target block
         for distance in range(1, max_distance * 10):  # Check every 0.1 units
             t = distance / 10.0
             pos = start + direction * t
             
-            block_pos = (int(math.floor(pos[0])), 
-                        int(math.floor(pos[1])), 
-                        int(math.floor(pos[2])))
+            #block_pos = (int(math.floor(pos[0])), 
+            #            int(math.floor(pos[1])), 
+            #            int(math.floor(pos[2])))
+            block_pos = np.round(pos).astype(int).tolist()
             
             if self.world.get_block(*block_pos).is_solid():
                 if place_mode:
                     # Return the position just before this solid block
                     prev_t = (distance - 1) / 10.0
                     prev_pos = start + direction * prev_t
-                    return (int(math.floor(prev_pos[0])), 
-                           int(math.floor(prev_pos[1])), 
-                           int(math.floor(prev_pos[2])))
+                    return np.round(prev_pos).astype(int).tolist()
                 else:
                     return block_pos
         
