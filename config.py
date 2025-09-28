@@ -14,8 +14,9 @@ FPS = 60
 
 # World settings
 CHUNK_SIZE = 16  # Width and depth of a chunk in blocks
-RENDER_DISTANCE = 8  # How far the player can see in blocks
+RENDER_DISTANCE = 1  # How far the player can see in blocks
 MAX_BLOCKS = 40960  # Max blocks to render for performance
+PLAYER_HAND_REACH = 5  # How far the player can reach to place/break blocks
 PLAYER_SPEED = 15.0  # Blocks per second # TODO: TO BE IMPLEMENTED
 FLY_SPEED = 20.0  # Blocks per second when flying
 GRAVITY = 9.81  # Gravity acceleration # TODO: TO BE IMPLEMENTED
