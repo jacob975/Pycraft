@@ -9,6 +9,7 @@ A simple Minecraft-like voxel game built with Python and Pygame.
 - Block placing and breaking
 - First-person camera movement
 - Basic chunk system
+- Save and load worlds via the main menu
 
 ## Installation
 
@@ -31,7 +32,7 @@ python main.py
 - **Left Click**: Break block
 - **Right Click**: Place block
 - **1-4**: Select block type
-- **ESC**: Exit game
+- **ESC**: Open pause menu (resume, save & quit)
 
 ## Project Structure
 

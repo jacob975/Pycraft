@@ -7,6 +7,7 @@ from __future__ import annotations
 import pygame
 import sys
 import time
+from datetime import datetime
 import numpy as np
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ except ImportError:
     raise ImportError("ModernGL is required for GPU menu rendering. Install with: pip install moderngl")
 
 from .font_manager import get_font_manager
+from .saves import SaveMetadata, list_saves
 
 @dataclass
 class ButtonState:
@@ -899,24 +901,146 @@ class ModernGLPauseMenu(ModernGLMenu):
         # Clean up texture
         subtitle_texture.release()
 
+
+def _format_timestamp(ts: float) -> str:
+    try:
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    except (OSError, ValueError):
+        return "unknown"
+
+
+def _show_load_world_menu(width: int, height: int) -> Optional[str]:
+    """Display a simple save selection screen and return the chosen identifier."""
+
+    saves: List[SaveMetadata] = list_saves()
+
+    screen = pygame.display.set_mode((width, height))
+    pygame.display.set_caption("Pycraft - Load World")
+    pygame.mouse.set_visible(True)
+    pygame.event.set_grab(False)
+
+    clock = pygame.time.Clock()
+    title_font = pygame.font.Font(None, 64)
+    item_font = pygame.font.Font(None, 36)
+    meta_font = pygame.font.Font(None, 24)
+    hint_font = pygame.font.Font(None, 24)
+
+    if not saves:
+        message_surface = item_font.render("No saved worlds found.", True, (220, 220, 230))
+        hint_surface = hint_font.render("Press ESC to return to the main menu.", True, (180, 180, 190))
+
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return None
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                        return None
+
+            screen.fill((18, 20, 30))
+            title_surface = title_font.render("Load Saved World", True, (240, 240, 255))
+            screen.blit(title_surface, title_surface.get_rect(center=(width // 2, height // 3)))
+            screen.blit(message_surface, message_surface.get_rect(center=(width // 2, height // 2)))
+            screen.blit(hint_surface, hint_surface.get_rect(center=(width // 2, height // 2 + 50)))
+
+            pygame.display.flip()
+            clock.tick(60)
+
+    selected_index = 0
+    max_visible = 6
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return None
+            if event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                    return None
+                if event.key in (pygame.K_UP, pygame.K_w):
+                    selected_index = (selected_index - 1) % len(saves)
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    selected_index = (selected_index + 1) % len(saves)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    return saves[selected_index].identifier
+
+        screen.fill((15, 18, 30))
+
+        title_surface = title_font.render("Load Saved World", True, (235, 235, 255))
+        screen.blit(title_surface, title_surface.get_rect(center=(width // 2, 100)))
+
+        hint_text = "Use ↑/↓ to choose a save, Enter to load, ESC to cancel"
+        hint_surface = hint_font.render(hint_text, True, (170, 170, 190))
+        screen.blit(hint_surface, hint_surface.get_rect(center=(width // 2, height - 60)))
+
+        if len(saves) <= max_visible:
+            start = 0
+            end = len(saves)
+        else:
+            start = max(0, selected_index - max_visible // 2)
+            end = start + max_visible
+            if end > len(saves):
+                end = len(saves)
+                start = max(0, end - max_visible)
+
+        list_width = 520
+        item_height = 70
+        top_offset = 170
+        item_x = width // 2 - list_width // 2
+
+        for visible_idx, save_idx in enumerate(range(start, end)):
+            save = saves[save_idx]
+            item_y = top_offset + visible_idx * (item_height + 10)
+            rect = pygame.Rect(item_x, item_y, list_width, item_height)
+            is_selected = save_idx == selected_index
+
+            bg_color = (60, 80, 140) if is_selected else (40, 50, 80)
+            border_color = (255, 255, 255) if is_selected else (120, 120, 150)
+
+            pygame.draw.rect(screen, bg_color, rect, border_radius=10)
+            pygame.draw.rect(screen, border_color, rect, 2, border_radius=10)
+
+            name_surface = item_font.render(save.display_name, True, (255, 255, 255))
+            screen.blit(name_surface, (rect.x + 20, rect.y + 12))
+
+            meta_text = f"Updated { _format_timestamp(save.updated_at) }"
+            meta_surface = meta_font.render(meta_text, True, (200, 200, 220))
+            screen.blit(meta_surface, (rect.x + 20, rect.y + 40))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
 def show_main_menu(width: int = 1024, height: int = 768, screen: pygame.Surface = None) -> Optional[str]:
     """Show the main menu and return the selected option with automatic fallback"""
-    try:
-        print("🚀 Attempting ModernGL GPU-accelerated menu...")
-        menu = ModernGLMenu(width, height, screen)
-        return menu.run()
-    except ImportError as e:
-        print(f"⚠️ ModernGL not available: {e}")
-        print("📱 Falling back to standard pygame menu")
-    except RuntimeError as e:
-        if "OpenGL" in str(e):
-            print(f"⚠️ OpenGL context error: {e}")
+
+    while True:
+        try:
+            print("🚀 Attempting ModernGL GPU-accelerated menu...")
+            menu = ModernGLMenu(width, height, screen)
+            result = menu.run()
+        except ImportError as e:
+            print(f"⚠️ ModernGL not available: {e}")
             print("📱 Falling back to standard pygame menu")
-        else:
+            return None
+        except RuntimeError as e:
+            if "OpenGL" in str(e):
+                print(f"⚠️ OpenGL context error: {e}")
+                print("📱 Falling back to standard pygame menu")
+                return None
             raise e
-    except Exception as e:
-        print(f"⚠️ ModernGL menu failed: {e}")
-        print("📱 Falling back to standard pygame menu")
+        except Exception as e:
+            print(f"⚠️ ModernGL menu failed: {e}")
+            print("📱 Falling back to standard pygame menu")
+            return None
+
+        if result == 'load_world':
+            selected_save = _show_load_world_menu(width, height)
+            if selected_save:
+                return f"load_world:{selected_save}"
+            # User cancelled save selection; restart the main menu loop
+            continue
+
+        return result
 
 
 def show_pause_menu(width: int = 1024, height: int = 768, screen: pygame.Surface = None) -> Optional[str]:

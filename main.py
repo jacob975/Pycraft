@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from game.engine import GameEngine
 from game.menu import show_main_menu
+from game.saves import load_game
 from config import *
 
 def main():
@@ -27,21 +28,35 @@ def main():
         screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         selected_option = show_main_menu(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, screen=screen)
 
-        if selected_option == 'exit' or selected_option is None:
+        action = selected_option
+        load_identifier = None
+
+        if isinstance(selected_option, str) and selected_option.startswith('load_world:'):
+            action = 'load_world'
+            load_identifier = selected_option.split(':', 1)[1]
+
+        if action == 'exit' or action is None:
             print("Exiting Pycraft. Thanks for playing!")
             return
         
-        elif selected_option == 'new_world':
+        elif action == 'new_world':
             print("Starting new world...")
             # Reuse the same pygame context and screen
             game = GameEngine(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, use_gpu=True, screen=screen)
             game.run()
             
-        elif selected_option == 'load_world':
-            print("Load world feature not implemented yet.")
-            print("Starting new world instead...")
-            # Reuse the same pygame context and screen
-            game = GameEngine(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, use_gpu=True, screen=screen)
+        elif action == 'load_world':
+            if not load_identifier:
+                print("No save slot selected. Returning to menu...")
+                return
+
+            print(f"Loading world '{load_identifier}'...")
+            state = load_game(load_identifier)
+            if not state:
+                print("Failed to load save. Starting a new world instead...")
+                game = GameEngine(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, use_gpu=True, screen=screen)
+            else:
+                game = GameEngine(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, use_gpu=True, screen=screen, load_state=state)
             game.run()
             
     except KeyboardInterrupt:

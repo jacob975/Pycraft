@@ -5,10 +5,12 @@ Core game engine and main game loop for Pycraft
 import pygame
 import sys
 import time
+from typing import Any, Dict, Optional, Tuple
 from .world import World
 from .player import Player
 from .blocks import BlockType
 from .menu import show_pause_menu
+from .saves import apply_player_state, apply_world_state, save_game
 from config import *
 
 # Try to import GPU renderer
@@ -24,7 +26,8 @@ except ImportError as e:
 class GameEngine:
     """Main game engine handling the game loop and coordination"""
     
-    def __init__(self, width: int = 1024, height: int = 768, use_gpu: bool = True, screen: pygame.Surface = None):
+    def __init__(self, width: int = 1024, height: int = 768, use_gpu: bool = True,
+                 screen: pygame.Surface = None, load_state: Optional[Dict[str, Any]] = None):
         # Initialize Pygame if not already done
         if not pygame.get_init():
             pygame.init()
@@ -39,9 +42,14 @@ class GameEngine:
         
         # Store screen reference for potential reuse
         self.external_screen = screen
+        self._load_state: Optional[Dict[str, Any]] = load_state
+        self.loaded_metadata: Optional[Dict[str, Any]] = load_state.get("metadata") if load_state else None
         
         # Initialize game components
-        self.world = World(use_multiprocessing=True)
+        world_seed = None
+        if load_state and isinstance(load_state.get("world"), dict):
+            world_seed = load_state["world"].get("seed")
+        self.world = World(seed=world_seed, use_multiprocessing=True)
         
         # Choose renderer based on availability and preference
         if self.use_gpu:
@@ -49,23 +57,41 @@ class GameEngine:
             print("使用GPU渲染器 - OpenGL硬體加速")
         else:
             raise NotImplementedError("CPU渲染器尚未實作")
-        # Find a good spawn position at ground level
+        # Determine spawn position
         spawn_x, spawn_z = 8, 8
-        ground_y = 30  # Start with a reasonable height
+        ground_y = 30
+        spawn_position: Tuple[float, float, float]
+
+        if load_state:
+            apply_world_state(self.world, load_state.get("world", {}))
+            player_state = load_state.get("player") or {}
+            position = player_state.get("position")
+            if isinstance(position, (list, tuple)) and len(position) == 3:
+                spawn_position = (float(position[0]), float(position[1]), float(position[2]))
+            else:
+                spawn_position = (spawn_x, ground_y, spawn_z)
+        else:
+            for y in range(60, 20, -1):
+                block = self.world.get_block(spawn_x, y, spawn_z)
+                if block.is_solid():
+                    ground_y = y + 2  # Spawn 2 blocks above solid ground
+                    break
+            spawn_position = (spawn_x, ground_y, spawn_z)
+            print(f"玩家生成位置: ({spawn_x}, {ground_y}, {spawn_z})")
         
-        # Try to find the actual ground level
-        for y in range(60, 20, -1):
-            block = self.world.get_block(spawn_x, y, spawn_z)
-            if block.is_solid():
-                ground_y = y + 2  # Spawn 2 blocks above solid ground
-                break
+        self.player = Player(self.world, spawn_position=spawn_position)
+        if load_state:
+            apply_player_state(self.player, load_state.get("player", {}))
+        else:
+            # Set camera to look slightly down to see the ground
+            self.player.camera.pitch = -0.4  # Look down about 23 degrees
+            self.player.camera.yaw = 0.0     # Face forward
         
-        self.player = Player(self.world, spawn_position=(spawn_x, ground_y, spawn_z))
-        # Set camera to look slightly down to see the ground
-        self.player.camera.pitch = -0.4  # Look down about 23 degrees
-        self.player.camera.yaw = 0.0     # Face forward
-        
-        print(f"玩家生成位置: ({spawn_x}, {ground_y}, {spawn_z})")
+        if self.loaded_metadata:
+            save_name = self.loaded_metadata.get("name") or self.loaded_metadata.get("id")
+            print(f"載入存檔: {save_name}")
+        elif load_state:
+            print("載入存檔: 未命名存檔")
         
         # Don't enable mouse lock by default - let user press Tab to enable
         # self.player.toggle_mouse_lock()
@@ -76,6 +102,16 @@ class GameEngine:
         # Always start with performance mode for better FPS
         self.performance_mode = True  # Always start in performance mode
         self.startup_time = 0.0  # Track startup time to ignore early ESC
+
+        if load_state:
+            engine_state = load_state.get("engine") or {}
+            self.debug_mode = bool(engine_state.get("debug_mode", self.debug_mode))
+            self.performance_mode = bool(engine_state.get("performance_mode", self.performance_mode))
+            if "fps_target" in engine_state:
+                try:
+                    self.fps_target = int(engine_state["fps_target"])
+                except (TypeError, ValueError):
+                    pass
         
         # Performance tracking
         self.frame_count = 0
@@ -85,6 +121,8 @@ class GameEngine:
         self._message_expire = 0.0
         # Renderer preference flag
         self.renderer_preference = 'gpu' if self.use_gpu else 'cpu'
+        if self.loaded_metadata and self.loaded_metadata.get("renderer"):
+            self.renderer_preference = self.loaded_metadata.get("renderer")
     
     def handle_events(self):
         """Handle all pygame events"""
@@ -175,6 +213,23 @@ class GameEngine:
         if selected_option == 'resume' or selected_option is None:
             self.pause = False
             print("繼續遊戲...")
+        elif selected_option == 'save_quit':
+            display_name = None
+            overwrite = False
+            if self.loaded_metadata:
+                display_name = self.loaded_metadata.get("name")
+                overwrite = True
+            metadata = save_game(self, save_name=display_name, overwrite=overwrite)
+            self.loaded_metadata = {
+                "id": metadata.identifier,
+                "name": metadata.display_name,
+                "created_at": metadata.created_at,
+                "updated_at": metadata.updated_at,
+                "renderer": self.renderer_preference,
+            }
+            print(f"存檔完成: {metadata.display_name} ({metadata.identifier})")
+            self.running = False
+            self.pause = False
         elif selected_option == 'exit' or selected_option == 'main_menu':
             print("退出遊戲...")
             self.running = False
