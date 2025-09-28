@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from game.engine import GameEngine
 from game.menu import show_main_menu
+from config import *
 
 def main():
     """Main function to start the game"""
@@ -23,9 +24,9 @@ def main():
         
         # Show main menu first
         print("Starting Pycraft...")
-        screen = pygame.display.set_mode((1024, 768))
-        selected_option = show_main_menu(width=1024, height=768, screen=screen)
-        
+        screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        selected_option = show_main_menu(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, screen=screen)
+
         if selected_option == 'exit' or selected_option is None:
             print("Exiting Pycraft. Thanks for playing!")
             return
@@ -33,14 +34,14 @@ def main():
         elif selected_option == 'new_world':
             print("Starting new world...")
             # Reuse the same pygame context and screen
-            game = GameEngine(width=1024, height=768, use_gpu=True, screen=screen)
+            game = GameEngine(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, use_gpu=True, screen=screen)
             game.run()
             
         elif selected_option == 'load_world':
             print("Load world feature not implemented yet.")
             print("Starting new world instead...")
             # Reuse the same pygame context and screen
-            game = GameEngine(width=1024, height=768, use_gpu=True, screen=screen)
+            game = GameEngine(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, use_gpu=True, screen=screen)
             game.run()
             
     except KeyboardInterrupt:

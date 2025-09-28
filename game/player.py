@@ -8,6 +8,7 @@ import numpy as np
 from .camera import Camera
 from .blocks import BlockType
 from .world import World
+from config import *
 
 class Player:
     """Player class handling movement and interactions"""
@@ -17,8 +18,10 @@ class Player:
         self.camera = Camera(spawn_position)
         
         # Player properties
-        self.speed = 15.0 # blocks per second
-        self.fly_speed = 20.0 # blocks per second
+        self.speed = PLAYER_SPEED # blocks per second
+        self.fly_speed = FLY_SPEED # blocks per second when flying
+        self.gravity = GRAVITY  # gravity acceleration
+        self.jump_velocity = JUMP_VELOCITY  # initial jump velocity
         self.flying = True  # Start in fly mode for simplicity
         
         # Selected block type

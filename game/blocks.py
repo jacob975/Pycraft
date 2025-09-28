@@ -2,26 +2,12 @@
 Block types and definitions for Pycraft
 """
 
-from enum import Enum
 from typing import Tuple
-
-class BlockType(Enum):
-    """Enumeration of different block types"""
-    AIR = 0
-    GRASS = 1
-    DIRT = 2
-    STONE = 3
-    WOOD = 4
+from config import *
 
 class Block:
     """Represents a single block in the world"""
-    _COLORS = {
-        BlockType.AIR: (0, 0, 0),
-        BlockType.GRASS: (34/255, 139/255, 34/255),
-        BlockType.DIRT: (139/255, 69/255, 19/255),
-        BlockType.STONE: (128/255, 128/255, 128/255),
-        BlockType.WOOD: (160/255, 82/255, 45/255),
-    }
+    _COLORS = BLOCK_COLORS
     _DEFAULT_COLOR = (1, 1, 1)
     
     def __init__(self, block_type: BlockType = BlockType.AIR):

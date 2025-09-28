@@ -10,6 +10,7 @@ import time
 import numpy as np
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
+from config import *
 
 # ModernGL is required for this menu system
 try:
@@ -555,9 +556,9 @@ class ModernGLMenu:
             font = font_mgr.get_font(title_size, bold=True)
             
             # Render title text
-            title_surface = font.render("PYCRAFT", True, (255, 255, 255))
-            shadow_surface = font.render("PYCRAFT", True, (50, 50, 50))
-            
+            title_surface = font.render(GAME_TITLE, True, (255, 255, 255))
+            shadow_surface = font.render(GAME_TITLE, True, (50, 50, 50))
+
             if title_surface.get_width() == 0:
                 return
             
@@ -622,7 +623,7 @@ class ModernGLMenu:
             
             # Version info
             version_font = font_mgr.get_font(16)
-            version_surface = version_font.render("Version 1.0.0 - ModernGL", True, (150, 150, 150))
+            version_surface = version_font.render(f"Version {VERSION}", True, (150, 150, 150))
             
             if version_surface.get_width() > 0:
                 texture = self._create_texture_from_surface(version_surface)
@@ -828,7 +829,7 @@ class SimpleMenu:
         self.screen.fill((30, 30, 50))
         
         # Draw title
-        title_surface = self.font_large.render("PYCRAFT", True, (255, 255, 255))
+        title_surface = self.font_large.render(GAME_TITLE, True, (255, 255, 255))
         title_rect = title_surface.get_rect()
         title_rect.centerx = self.width // 2
         title_rect.y = 100

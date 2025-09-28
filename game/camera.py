@@ -5,6 +5,7 @@
 import math
 import numpy as np
 from typing import Tuple
+from config import *
 
 class Camera:
     """3D camera for first-person view"""
@@ -13,11 +14,6 @@ class Camera:
         self.position = np.array(position, dtype=float)
         self.yaw = 0.0  # Rotation around Y axis
         self.pitch = 0.0  # Rotation around X axis
-        
-        # Camera settings
-        self.fov = 70.0  # Field of view in degrees
-        self.near = 0.1
-        self.far = 100.0
 
         # Cheatsheet
         # +X: Right
@@ -27,7 +23,7 @@ class Camera:
         # Pitch: 0 = +Z, π/2 = +Y
         
         # Movement sensitivity
-        self.mouse_sensitivity = 0.003  # Adjusted for better control
+        self.mouse_sensitivity = MOUSE_SENSITIVITY  # Adjusted for better control
         
     def set_position(self, x: float, y: float, z: float):
         """Set camera position"""

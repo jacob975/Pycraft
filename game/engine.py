@@ -8,6 +8,7 @@ import time
 from .world import World
 from .player import Player
 from .blocks import BlockType
+from config import *
 
 # Try to import GPU renderer
 try:
@@ -68,7 +69,7 @@ class GameEngine:
         # self.player.toggle_mouse_lock()
         
         # Game state - optimized for performance
-        self.fps_target = 120 if self.use_gpu else 60  # Higher FPS targets
+        self.fps_target = FPS * 2 if self.use_gpu else FPS  # Higher FPS targets
         self.debug_mode = False
         # Always start with performance mode for better FPS
         self.performance_mode = True  # Always start in performance mode
@@ -148,7 +149,6 @@ class GameEngine:
                 'chunks_loaded': chunks_loaded,
                 'selected_block': block_name,
                 'performance_mode': self.performance_mode,
-                'async_stats': self.world.get_async_stats() if hasattr(self.world, 'get_async_stats') else {}
             }
             
             self.renderer.draw_debug_info(debug_data)

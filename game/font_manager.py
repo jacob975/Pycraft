@@ -17,6 +17,7 @@ try:
     OPENGL_AVAILABLE = True
 except ImportError:
     OPENGL_AVAILABLE = False
+from config import *
 
 class FontManager:
     """字體管理器，支持中文字體和 OpenGL 渲染"""

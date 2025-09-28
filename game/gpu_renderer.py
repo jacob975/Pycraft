@@ -29,6 +29,7 @@ import multiprocessing as mp
 from .world import World, Chunk
 from .camera import Camera
 from .blocks import Block
+from config import *
 
 import pygame
 
@@ -92,10 +93,6 @@ class GPURenderer:
         self._create_shaders()
         self._create_geometry_buffers()
         self._setup_uniforms()
-
-        self.fov = 70.0
-        self.near = 0.1
-        self.far = 100.0
         self.aspect = screen_width / screen_height
 
         # Enhanced stats for debug and performance tracking
@@ -291,9 +288,6 @@ class GPURenderer:
     
     def _setup_uniforms(self):
         """Setup uniform locations and initial values"""
-        self.fov = 70.0
-        self.near = 0.1
-        self.far = 100.0
         self.aspect = self.screen_width / self.screen_height
         
         # Pre-calculate projection matrix
@@ -352,13 +346,13 @@ class GPURenderer:
     
     def _create_projection_matrix(self):
         """Create perspective projection matrix"""
-        fovy_rad = np.radians(self.fov)
+        fovy_rad = np.radians(FOV)
         f = 1.0 / np.tan(fovy_rad / 2.0)
         
         proj = np.array([
             [f / self.aspect, 0,  0,  0],
             [0, f,  0,  0],
-            [0, 0, (self.far + self.near) / (self.near - self.far), (2 * self.far * self.near) / (self.near - self.far)],
+            [0, 0, (FAR_PLANE + NEAR_PLANE) / (NEAR_PLANE - FAR_PLANE), (2 * FAR_PLANE * NEAR_PLANE) / (NEAR_PLANE - FAR_PLANE)],
             [0, 0, -1,  0]
         ], dtype=np.float32)
         
@@ -448,8 +442,8 @@ class GPURenderer:
         self.ctx.depth_func = '<'  # Less than comparison
         
         # Determine render limits based on performance mode 
-        max_blocks = 40960 if performance_mode else 81920
-        render_distance = 8
+        max_blocks = MAX_BLOCKS if performance_mode else MAX_BLOCKS * 2
+        render_distance = RENDER_DISTANCE
         
         # Get visible chunks using optimized culling
         visible_chunks = self._get_optimized_visible_chunks(world, camera, render_distance)
@@ -616,22 +610,11 @@ class GPURenderer:
 
     def _draw_ui_text_moderngl(self, world: World, camera: Camera):
         """Draw UI text using ModernGL with texture-based text rendering"""
-        try:
-            from .font_manager import get_font_manager
-            font_mgr = get_font_manager()
-            
+        try:            
             # Disable depth testing for UI rendering
             self.ctx.disable(mgl.DEPTH_TEST)
             self.ctx.enable(mgl.BLEND)
             self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
-            
-            # Set up orthographic projection for UI
-            ortho_matrix = np.array([
-                [2.0 / self.screen_width, 0, 0, -1],
-                [0, -2.0 / self.screen_height, 0, 1],
-                [0, 0, -1, 0],
-                [0, 0, 0, 1]
-            ], dtype=np.float32)
             
             # Create text shader if not exists
             if not hasattr(self, 'text_shader'):

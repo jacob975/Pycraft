@@ -14,6 +14,7 @@ except ImportError:
     noise = None
 
 from .blocks import Block, BlockType
+from config import *
 
 class Chunk:
     """A chunk of blocks in the world"""
@@ -106,7 +107,7 @@ class Chunk:
             if has_visible_face:
                 world_pos = (x + chunk_world_x, y, z + chunk_world_z)
                 positions.append(world_pos)
-                colors.append(color_cache.get(block.type, color_cache[BlockType.STONE]))
+                colors.append(color_cache.get(block.type, Block._DEFAULT_COLOR))
                 block_types.append(block.type)
         
         # Convert to optimized NumPy arrays
