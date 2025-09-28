@@ -559,9 +559,7 @@ class GPURenderer:
         # Render crosshair
         self._draw_crosshair_moderngl()
         
-        # Render UI text (position, controls, etc)
-        self._draw_ui_text_moderngl(world, camera)
-        
+        # TODO: Render UI text (position, controls, etc)
     
     def _draw_crosshair_moderngl(self):
         """Draw crosshair using ModernGL"""
@@ -607,49 +605,6 @@ class GPURenderer:
         
         # Re-enable depth testing
         self.ctx.enable(mgl.DEPTH_TEST)
-
-    def _draw_ui_text_moderngl(self, world: World, camera: Camera):
-        """Draw UI text using ModernGL with texture-based text rendering"""
-        try:            
-            # Disable depth testing for UI rendering
-            self.ctx.disable(mgl.DEPTH_TEST)
-            self.ctx.enable(mgl.BLEND)
-            self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
-            
-            # Create text shader if not exists
-            if not hasattr(self, 'text_shader'):
-                self._create_text_shader()
-            
-            # Render debug text at top-left
-            pos = camera.position
-            debug_text = f"Position: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
-            self._render_text_texture(debug_text, 10, 10, font_size=24, color=(255, 255, 255))
-            
-            # Render additional info
-            fps_text = f"FPS: {1000.0 / max(self.last_stats['render_time_ms'], 1):.1f}"
-            self._render_text_texture(fps_text, 10, 40, font_size=24, color=(255, 255, 0))
-            
-            blocks_text = f"Blocks: {self.last_stats['blocks']}"
-            self._render_text_texture(blocks_text, 10, 70, font_size=24, color=(0, 255, 255))
-            
-            # Re-enable depth testing
-            self.ctx.disable(mgl.BLEND)
-            self.ctx.enable(mgl.DEPTH_TEST)
-            
-        except Exception as e:
-            # Fallback to console output if texture rendering fails
-            pos = camera.position
-            debug_text = f"Position: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}) | " + \
-                        f"Pitch: {camera.pitch:.1f}, Yaw: {camera.yaw:.1f} | " + \
-                        f"Blocks: {self.last_stats['blocks']} | " + \
-                        f"FPS: {1000.0 / max(self.last_stats['render_time_ms'], 1):.1f}"
-            
-            if hasattr(self, '_last_debug_print_time'):
-                if time.time() - self._last_debug_print_time > 1.0:
-                    print(f"\r{debug_text}", end='')
-                    self._last_debug_print_time = time.time()
-            else:
-                self._last_debug_print_time = time.time()
 
     def _create_text_shader(self):
         """Create shader program for text rendering"""

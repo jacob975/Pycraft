@@ -742,199 +742,21 @@ class ModernGLMenu:
         except Exception as e:
             print(f"Cleanup warning: {e}")
 
-# Simple pygame-based menu as fallback
-class SimpleMenu:
-    """Simple pygame-based menu as fallback when ModernGL is not available"""
-    
-    def __init__(self, width: int = 1024, height: int = 768, screen: pygame.Surface = None):
-        self.width = width
-        self.height = height
-        self.running = True
-        self.selected_option = None
-        
-        if screen is None:
-            self.screen = pygame.display.set_mode((width, height))
-            pygame.display.set_caption("Pycraft - Main Menu")
-        else:
-            self.screen = screen
-            
-        self.clock = pygame.time.Clock()
-        self.font_large = None
-        self.font_medium = None
-        self.font_small = None
-        
-        # Try to load fonts
-        try:
-            from .font_manager import get_font_manager
-            font_mgr = get_font_manager()
-            self.font_large = font_mgr.get_font(64, bold=True)
-            self.font_medium = font_mgr.get_font(28)
-            self.font_small = font_mgr.get_font(16)
-        except:
-            # Fallback to pygame default fonts
-            pygame.font.init()
-            self.font_large = pygame.font.Font(None, 64)
-            self.font_medium = pygame.font.Font(None, 28)
-            self.font_small = pygame.font.Font(None, 16)
-    
-    def handle_events(self):
-        """Handle pygame events"""
-        mouse_pos = pygame.mouse.get_pos()
-        
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.selected_option = 'exit'
-                self.running = False
-            
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    self.selected_option = 'exit'
-                    self.running = False
-                elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
-                    self.selected_option = 'new_world'
-                    self.running = False
-            
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
-                    # Check button clicks
-                    button_y_start = self.height // 2 - 30
-                    button_height = 50
-                    button_spacing = 20
-                    button_width = 300
-                    button_x = self.width // 2 - button_width // 2
-                    
-                    # New World button
-                    if (button_x <= mouse_pos[0] <= button_x + button_width and
-                        button_y_start <= mouse_pos[1] <= button_y_start + button_height):
-                        self.selected_option = 'new_world'
-                        self.running = False
-                    
-                    # Load World button
-                    elif (button_x <= mouse_pos[0] <= button_x + button_width and
-                          button_y_start + button_height + button_spacing <= mouse_pos[1] <= 
-                          button_y_start + 2 * button_height + button_spacing):
-                        self.selected_option = 'load_world'
-                        self.running = False
-                    
-                    # Exit button
-                    elif (button_x <= mouse_pos[0] <= button_x + button_width and
-                          button_y_start + 2 * (button_height + button_spacing) <= mouse_pos[1] <= 
-                          button_y_start + 3 * button_height + 2 * button_spacing):
-                        self.selected_option = 'exit'
-                        self.running = False
-    
-    def render(self):
-        """Render the simple menu"""
-        # Clear screen with dark background
-        self.screen.fill((30, 30, 50))
-        
-        # Draw title
-        title_surface = self.font_large.render(GAME_TITLE, True, (255, 255, 255))
-        title_rect = title_surface.get_rect()
-        title_rect.centerx = self.width // 2
-        title_rect.y = 100
-        self.screen.blit(title_surface, title_rect)
-        
-        # Draw subtitle
-        subtitle_surface = self.font_medium.render("A Minecraft-like Adventure", True, (200, 200, 200))
-        subtitle_rect = subtitle_surface.get_rect()
-        subtitle_rect.centerx = self.width // 2
-        subtitle_rect.y = title_rect.bottom + 10
-        self.screen.blit(subtitle_surface, subtitle_rect)
-        
-        # Draw buttons
-        mouse_pos = pygame.mouse.get_pos()
-        button_y_start = self.height // 2 - 30
-        button_height = 50
-        button_spacing = 20
-        button_width = 300
-        button_x = self.width // 2 - button_width // 2
-        
-        buttons = [
-            ("Start New World", (40, 120, 40)),
-            ("Load World", (40, 80, 120)),
-            ("Exit Game", (120, 40, 40))
-        ]
-        
-        for i, (text, color) in enumerate(buttons):
-            button_rect = pygame.Rect(
-                button_x,
-                button_y_start + i * (button_height + button_spacing),
-                button_width,
-                button_height
-            )
-            
-            # Check if mouse is over button
-            is_hovered = button_rect.collidepoint(mouse_pos)
-            
-            # Choose color based on hover state
-            if is_hovered:
-                draw_color = tuple(min(255, c + 20) for c in color)
-            else:
-                draw_color = color
-            
-            # Draw button background
-            pygame.draw.rect(self.screen, draw_color, button_rect)
-            pygame.draw.rect(self.screen, (100, 100, 100), button_rect, 2)
-            
-            # Draw button text
-            text_surface = self.font_medium.render(text, True, (255, 255, 255))
-            text_rect = text_surface.get_rect()
-            text_rect.center = button_rect.center
-            self.screen.blit(text_surface, text_rect)
-        
-        # Draw instructions
-        instructions = [
-            "Use mouse to click buttons",
-            "Press Enter for New World",
-            "Press ESC to exit"
-        ]
-        
-        y_offset = self.height - 100
-        for instruction in instructions:
-            inst_surface = self.font_small.render(instruction, True, (120, 120, 120))
-            inst_rect = inst_surface.get_rect()
-            inst_rect.centerx = self.width // 2
-            inst_rect.y = y_offset
-            self.screen.blit(inst_surface, inst_rect)
-            y_offset += 20
-        
-        pygame.display.flip()
-    
-    def run(self) -> Optional[str]:
-        """Run the simple menu"""
-        print("📱 Simple pygame menu started")
-        
-        while self.running:
-            self.handle_events()
-            self.render()
-            self.clock.tick(60)
-        
-        return self.selected_option
-
-def show_main_menu(width: int = 1024, height: int = 768, screen: pygame.Surface = None, prefer_moderngl: bool = True) -> Optional[str]:
+def show_main_menu(width: int = 1024, height: int = 768, screen: pygame.Surface = None) -> Optional[str]:
     """Show the main menu and return the selected option with automatic fallback"""
-    
-    # Try ModernGL menu first if preferred and available
-    if prefer_moderngl:
-        try:
-            print("🚀 Attempting ModernGL GPU-accelerated menu...")
-            menu = ModernGLMenu(width, height, screen)
-            return menu.run()
-        except ImportError as e:
-            print(f"⚠️ ModernGL not available: {e}")
+    try:
+        print("🚀 Attempting ModernGL GPU-accelerated menu...")
+        menu = ModernGLMenu(width, height, screen)
+        return menu.run()
+    except ImportError as e:
+        print(f"⚠️ ModernGL not available: {e}")
+        print("📱 Falling back to standard pygame menu")
+    except RuntimeError as e:
+        if "OpenGL" in str(e):
+            print(f"⚠️ OpenGL context error: {e}")
             print("📱 Falling back to standard pygame menu")
-        except RuntimeError as e:
-            if "OpenGL" in str(e):
-                print(f"⚠️ OpenGL context error: {e}")
-                print("📱 Falling back to standard pygame menu")
-            else:
-                raise e
-        except Exception as e:
-            print(f"⚠️ ModernGL menu failed: {e}")
-            print("📱 Falling back to standard pygame menu")
-    
-    # Fallback to simple pygame menu
-    print("📱 Using standard pygame menu")
-    menu = SimpleMenu(width, height, screen)
-    return menu.run()
+        else:
+            raise e
+    except Exception as e:
+        print(f"⚠️ ModernGL menu failed: {e}")
+        print("📱 Falling back to standard pygame menu")
