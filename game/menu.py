@@ -92,37 +92,54 @@ class ModernGLMenu:
     
     def _init_moderngl_context(self, existing_screen: pygame.Surface = None):
         """Initialize ModernGL context and pygame OpenGL window"""
-        # Always create a new OpenGL-enabled window for ModernGL
-        # ModernGL requires a proper OpenGL context which might not exist with existing screens
-        
-        # Set OpenGL attributes before creating the display
-        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
-        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
-        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
-        pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
-        pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
-        
-        # Try to enable MSAA, but don't fail if not supported
-        try:
-            pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
-        except pygame.error:
-            print("⚠️ MSAA not supported, continuing without anti-aliasing")
-        
-        # Create OpenGL-enabled window
-        flags = pygame.OPENGL | pygame.DOUBLEBUF
-        self.screen = pygame.display.set_mode((self.width, self.height), flags)
-        pygame.display.set_caption("Pycraft - ModernGL Menu")
-        
-        # Ensure OpenGL context is active
-        pygame.display.gl_set_attribute(pygame.GL_SHARE_WITH_CURRENT_CONTEXT, 1)
-        
-        # Create ModernGL context
+
+        def create_new_window():
+            pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
+            pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
+            pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
+            pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
+            pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
+
+            try:
+                pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
+            except pygame.error:
+                print("⚠️ MSAA not supported, continuing without anti-aliasing")
+
+            flags = pygame.OPENGL | pygame.DOUBLEBUF
+            self.screen = pygame.display.set_mode((self.width, self.height), flags)
+            pygame.display.set_caption("Pycraft - ModernGL Menu")
+            pygame.display.gl_set_attribute(pygame.GL_SHARE_WITH_CURRENT_CONTEXT, 1)
+
+        reused_context = False
+        if existing_screen is not None:
+            try:
+                has_opengl = bool(existing_screen.get_flags() & pygame.OPENGL)
+                same_size = existing_screen.get_size() == (self.width, self.height)
+                if has_opengl and same_size:
+                    self.screen = existing_screen
+                    reused_context = True
+                    pygame.display.set_caption("Pycraft - ModernGL Menu")
+            except pygame.error:
+                reused_context = False
+
+        if not reused_context:
+            create_new_window()
+
         try:
             self.ctx = mgl.create_context()
             print("✅ ModernGL context created successfully")
         except Exception as e:
-            raise RuntimeError(f"Failed to create ModernGL context: {e}")
-        
+            if reused_context:
+                print("⚠️ Failed to attach to existing OpenGL context, recreating window...")
+                create_new_window()
+                try:
+                    self.ctx = mgl.create_context()
+                    print("✅ ModernGL context created successfully")
+                except Exception as inner_error:
+                    raise RuntimeError(f"Failed to create ModernGL context: {inner_error}") from inner_error
+            else:
+                raise RuntimeError(f"Failed to create ModernGL context: {e}") from e
+
         # Enable features for UI rendering
         self.ctx.enable(mgl.BLEND)
         self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
@@ -130,7 +147,7 @@ class ModernGLMenu:
         # Ensure depth testing is disabled so 2D UI elements render in draw order
         # (the pause menu shares the GPU context with the 3D renderer, which leaves depth testing on)
         self.ctx.disable(mgl.DEPTH_TEST)
-        
+
         print("✅ ModernGL context initialized for menu")
     
     def _create_shaders(self):
@@ -902,6 +919,295 @@ class ModernGLPauseMenu(ModernGLMenu):
         subtitle_texture.release()
 
 
+class ModernGLLoadMenu(ModernGLMenu):
+    """ModernGL-powered load world selector."""
+
+    def __init__(self, width: int, height: int, saves: List[SaveMetadata], screen: pygame.Surface = None):
+        self.saves = saves
+        self.selected_index = 0 if saves else -1
+        self.hover_index = -1
+        self.visible_offset = 0
+        self.max_visible = 6
+        self._item_rects: List[Tuple[pygame.Rect, int]] = []
+        super().__init__(width, height, screen)
+        pygame.display.set_caption("Pycraft - Load World")
+        pygame.mouse.set_visible(True)
+        pygame.event.set_grab(False)
+        self._ensure_selection_visible()
+
+    def _create_buttons(self):
+        # No traditional buttons; navigation handled via list and keyboard/mouse.
+        self.buttons = {}
+
+    def handle_events(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.selected_option = None
+                self.running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                    self.selected_option = None
+                    self.running = False
+                elif self.saves and event.key in (pygame.K_UP, pygame.K_w):
+                    self._change_selection(-1)
+                elif self.saves and event.key in (pygame.K_DOWN, pygame.K_s):
+                    self._change_selection(1)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    if self.saves and self.selected_index >= 0:
+                        self.selected_option = self.saves[self.selected_index].identifier
+                    else:
+                        self.selected_option = None
+                    self.running = False
+            elif event.type == pygame.MOUSEWHEEL and self.saves:
+                direction = -event.y
+                if direction != 0:
+                    self._change_selection(direction)
+            elif event.type == pygame.MOUSEMOTION and self.saves:
+                self.hover_index = -1
+                for rect, idx in self._item_rects:
+                    if rect.collidepoint(event.pos):
+                        self.hover_index = idx
+                        break
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.saves:
+                for rect, idx in self._item_rects:
+                    if rect.collidepoint(event.pos):
+                        self.selected_index = idx
+                        self._ensure_selection_visible()
+                        self.selected_option = self.saves[idx].identifier
+                        self.running = False
+                        break
+
+    def _change_selection(self, delta: int):
+        if not self.saves:
+            return
+
+        if self.selected_index < 0:
+            self.selected_index = 0
+        else:
+            self.selected_index = (self.selected_index + delta) % len(self.saves)
+        self._ensure_selection_visible()
+
+    def _ensure_selection_visible(self):
+        if not self.saves:
+            self.visible_offset = 0
+            return
+
+        if self.selected_index < 0:
+            self.selected_index = 0
+
+        if self.selected_index < self.visible_offset:
+            self.visible_offset = self.selected_index
+        elif self.selected_index >= self.visible_offset + self.max_visible:
+            self.visible_offset = self.selected_index - self.max_visible + 1
+
+        max_offset = max(0, len(self.saves) - self.max_visible)
+        self.visible_offset = max(0, min(self.visible_offset, max_offset))
+
+    def render(self):
+        self.ctx.clear(self.bg_color[0], self.bg_color[1], self.bg_color[2], 1.0)
+        self.ctx.viewport = (0, 0, self.width, self.height)
+
+        self._render_background()
+        self._render_title()
+
+        if self.saves:
+            self._render_save_list()
+        else:
+            self._render_empty_state()
+
+        self._render_footer()
+        pygame.display.flip()
+
+    def _render_title(self):
+        try:
+            font_mgr = get_font_manager()
+            title_size = int(52 * self.title_scale)
+            font = font_mgr.get_font(title_size, bold=True)
+            title_surface = font.render("Load Saved World", True, (255, 255, 255))
+            shadow_surface = font.render("Load Saved World", True, (50, 50, 60))
+
+            if title_surface.get_width() == 0:
+                return
+
+            shadow_texture = self._create_texture_from_surface(shadow_surface)
+            title_texture = self._create_texture_from_surface(title_surface)
+
+            title_x = self.width // 2 - title_surface.get_width() // 2
+            title_y = 90
+
+            self._render_texture(
+                shadow_texture,
+                title_x + 3,
+                title_y + 3,
+                title_surface.get_width(),
+                title_surface.get_height(),
+                np.array([1.0, 1.0, 1.0], dtype=np.float32)
+            )
+
+            self._render_texture(
+                title_texture,
+                title_x,
+                title_y,
+                title_surface.get_width(),
+                title_surface.get_height(),
+                np.array([1.0, 1.0, 1.0], dtype=np.float32)
+            )
+
+            shadow_texture.release()
+            title_texture.release()
+        except Exception as exc:
+            print(f"Title rendering error for load menu: {exc}")
+
+    def _render_save_list(self):
+        font_mgr = get_font_manager()
+        name_font = font_mgr.get_font(28, bold=True)
+        meta_font = font_mgr.get_font(18)
+
+        list_width = min(int(self.width * 0.65), self.width - 120)
+        item_height = 74
+        spacing = 12
+
+        visible_count = min(self.max_visible, len(self.saves) - self.visible_offset)
+        total_height = visible_count * item_height + max(0, visible_count - 1) * spacing
+        start_y = max(160, (self.height - total_height) // 2)
+        start_x = (self.width - list_width) // 2
+
+        base_color = np.array([36 / 255.0, 48 / 255.0, 80 / 255.0], dtype=np.float32)
+        hover_color = np.array([48 / 255.0, 64 / 255.0, 104 / 255.0], dtype=np.float32)
+        selected_color = np.array([72 / 255.0, 100 / 255.0, 168 / 255.0], dtype=np.float32)
+        border_color = np.array([150 / 255.0, 160 / 255.0, 200 / 255.0], dtype=np.float32)
+
+        self._item_rects = []
+
+        for row in range(visible_count):
+            idx = self.visible_offset + row
+            save = self.saves[idx]
+            item_y = start_y + row * (item_height + spacing)
+            rect = pygame.Rect(start_x, item_y, list_width, item_height)
+            self._item_rects.append((rect, idx))
+
+            is_selected = idx == self.selected_index
+            is_hovered = idx == self.hover_index and not is_selected
+            fill_color = selected_color if is_selected else hover_color if is_hovered else base_color
+
+            self._render_rect(rect.x, rect.y, rect.width, rect.height, fill_color)
+            self._render_rect(rect.x, rect.y, rect.width, 3, border_color)
+            self._render_rect(rect.x, rect.y + rect.height - 3, rect.width, 3, border_color)
+
+            if is_selected:
+                glow_color = np.array([120 / 255.0, 170 / 255.0, 255 / 255.0], dtype=np.float32)
+                self._render_rect(rect.x + rect.width - 6, rect.y, 6, rect.height, glow_color)
+                self._render_selection_cursor(rect)
+
+            name_surface = name_font.render(save.display_name, True, (255, 255, 255))
+            if name_surface.get_width() > 0:
+                name_texture = self._create_texture_from_surface(name_surface)
+                self._render_texture(
+                    name_texture,
+                    rect.x + 24,
+                    rect.y + 14,
+                    name_surface.get_width(),
+                    name_surface.get_height(),
+                    np.array([1.0, 1.0, 1.0], dtype=np.float32)
+                )
+                name_texture.release()
+
+            meta_text = f"Updated {_format_timestamp(save.updated_at)}"
+            if save.identifier:
+                meta_text += f"  •  ID: {save.identifier}"
+            meta_surface = meta_font.render(meta_text, True, (205, 210, 235))
+            if meta_surface.get_width() > 0:
+                meta_texture = self._create_texture_from_surface(meta_surface)
+                self._render_texture(
+                    meta_texture,
+                    rect.x + 24,
+                    rect.y + rect.height - meta_surface.get_height() - 12,
+                    meta_surface.get_width(),
+                    meta_surface.get_height(),
+                    np.array([1.0, 1.0, 1.0], dtype=np.float32)
+                )
+                meta_texture.release()
+
+    def _render_empty_state(self):
+        font_mgr = get_font_manager()
+        message_font = font_mgr.get_font(32, bold=True)
+        hint_font = font_mgr.get_font(22)
+
+        message_surface = message_font.render("No saved worlds found", True, (235, 235, 255))
+        hint_surface = hint_font.render("Press ESC to return to the main menu", True, (190, 195, 215))
+
+        for surface, y_offset in ((message_surface, -20), (hint_surface, 30)):
+            if surface.get_width() == 0:
+                continue
+            texture = self._create_texture_from_surface(surface)
+            self._render_texture(
+                texture,
+                self.width // 2 - surface.get_width() // 2,
+                self.height // 2 + y_offset,
+                surface.get_width(),
+                surface.get_height(),
+                np.array([1.0, 1.0, 1.0], dtype=np.float32)
+            )
+            texture.release()
+
+    def _render_selection_cursor(self, rect: pygame.Rect) -> None:
+        pointer_width = 28
+        pointer_surface = pygame.Surface((pointer_width, rect.height), pygame.SRCALPHA)
+
+        pulse = 0.5 + 0.5 * np.sin(self.title_time * 4.0)
+        base_color = np.array([0.40, 0.65, 1.0])
+        highlight_color = np.clip(base_color + pulse * 0.15, 0.0, 1.0)
+        rgba = tuple(int(c * 255) for c in highlight_color) + (int(180 + 60 * pulse),)
+
+        pygame.draw.polygon(
+            pointer_surface,
+            rgba,
+            [
+                (0, rect.height // 2),
+                (pointer_width, 6),
+                (pointer_width, rect.height - 6),
+            ],
+        )
+
+        pointer_texture = self._create_texture_from_surface(pointer_surface)
+        pointer_x = max(rect.x - pointer_width - 12, 0)
+        self._render_texture(
+            pointer_texture,
+            pointer_x,
+            rect.y,
+            pointer_surface.get_width(),
+            pointer_surface.get_height(),
+            np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        )
+        pointer_texture.release()
+
+    def _render_footer(self):
+        font_mgr = get_font_manager()
+        hint_font = font_mgr.get_font(18)
+
+        hints = [
+            "Use ↑/↓ or the mouse wheel to navigate",
+            "Press Enter or click to load the selected world",
+            "Press ESC to cancel"
+        ]
+
+        start_y = self.height - 110
+        for i, text in enumerate(hints):
+            surface = hint_font.render(text, True, (180, 185, 210))
+            if surface.get_width() == 0:
+                continue
+            texture = self._create_texture_from_surface(surface)
+            self._render_texture(
+                texture,
+                self.width // 2 - surface.get_width() // 2,
+                start_y + i * 26,
+                surface.get_width(),
+                surface.get_height(),
+                np.array([1.0, 1.0, 1.0], dtype=np.float32)
+            )
+            texture.release()
+
+
 def _format_timestamp(ts: float) -> str:
     try:
         return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
@@ -909,8 +1215,22 @@ def _format_timestamp(ts: float) -> str:
         return "unknown"
 
 
-def _show_load_world_menu(width: int, height: int) -> Optional[str]:
-    """Display a simple save selection screen and return the chosen identifier."""
+def _show_load_world_menu(width: int, height: int, screen: pygame.Surface) -> Optional[str]:
+    """Show the load-world selector using ModernGL with pygame fallback."""
+
+    saves: List[SaveMetadata] = list_saves()
+
+    try:
+        menu = ModernGLLoadMenu(width, height, saves, screen=screen)
+        return menu.run()
+    except Exception as exc:
+        print(f"⚠️ ModernGL load menu failed: {exc}")
+        print("📱 Falling back to simple pygame load menu")
+        return _show_simple_load_world_menu(width, height, screen)
+
+
+def _show_simple_load_world_menu(width: int, height: int, screen: pygame.Surface) -> Optional[str]:
+    """Fallback pygame load menu when ModernGL is unavailable."""
 
     saves: List[SaveMetadata] = list_saves()
 
@@ -1034,7 +1354,8 @@ def show_main_menu(width: int = 1024, height: int = 768, screen: pygame.Surface 
             return None
 
         if result == 'load_world':
-            selected_save = _show_load_world_menu(width, height)
+            current_screen = pygame.display.get_surface() or screen
+            selected_save = _show_load_world_menu(width, height, current_screen)
             if selected_save:
                 return f"load_world:{selected_save}"
             # User cancelled save selection; restart the main menu loop
@@ -1052,112 +1373,3 @@ def show_pause_menu(width: int = 1024, height: int = 768, screen: pygame.Surface
     except ImportError as e:
         print(f"⚠️ ModernGL not available for pause menu: {e}")
         print("📱 Falling back to simple pause menu")
-        return _show_simple_pause_menu(width, height, screen)
-    except RuntimeError as e:
-        if "OpenGL" in str(e):
-            print(f"⚠️ OpenGL context error for pause menu: {e}")
-            print("📱 Falling back to simple pause menu")
-            return _show_simple_pause_menu(width, height, screen)
-        else:
-            raise e
-    except Exception as e:
-        print(f"⚠️ ModernGL pause menu failed: {e}")
-        print("📱 Falling back to simple pause menu")
-        return _show_simple_pause_menu(width, height, screen)
-
-
-def _show_simple_pause_menu(width: int, height: int, screen: pygame.Surface) -> Optional[str]:
-    """Simple fallback pause menu using basic pygame rendering"""
-    if not screen:
-        screen = pygame.display.set_mode((width, height))
-    
-    pygame.font.init()
-    font_large = pygame.font.Font(None, 48)
-    font_medium = pygame.font.Font(None, 32)
-    
-    # Semi-transparent overlay surface
-    overlay = pygame.Surface((width, height))
-    overlay.set_alpha(200)  # Semi-transparent
-    overlay.fill((20, 20, 20))
-    
-    clock = pygame.time.Clock()
-    running = True
-    selected_option = None
-    
-    # Button dimensions
-    button_width = 250
-    button_height = 50
-    button_spacing = 15
-    start_y = height // 2 - 60
-    
-    buttons = [
-        {"text": "Resume Game", "action": "resume", "color": (40, 120, 40)},
-        {"text": "Settings", "action": "settings", "color": (80, 80, 120)},
-        {"text": "Save & Quit", "action": "save_quit", "color": (120, 80, 40)},
-        {"text": "Exit to Main Menu", "action": "main_menu", "color": (120, 40, 40)}
-    ]
-    
-    # Create button rectangles
-    button_rects = []
-    for i, button in enumerate(buttons):
-        rect = pygame.Rect(
-            width // 2 - button_width // 2,
-            start_y + i * (button_height + button_spacing),
-            button_width,
-            button_height
-        )
-        button_rects.append(rect)
-    
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                selected_option = 'main_menu'
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    selected_option = 'resume'
-                    running = False
-                elif event.key == pygame.K_RETURN:
-                    selected_option = 'resume'
-                    running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
-                    mouse_pos = event.pos
-                    for i, rect in enumerate(button_rects):
-                        if rect.collidepoint(mouse_pos):
-                            selected_option = buttons[i]["action"]
-                            running = False
-        
-        # Render
-        screen.blit(overlay, (0, 0))
-        
-        # Title
-        title_text = font_large.render("GAME PAUSED", True, (255, 255, 255))
-        title_rect = title_text.get_rect(center=(width // 2, height // 4))
-        screen.blit(title_text, title_rect)
-        
-        # Subtitle
-        subtitle_text = font_medium.render("Press ESC or click Resume to continue", True, (180, 180, 180))
-        subtitle_rect = subtitle_text.get_rect(center=(width // 2, height // 4 + 50))
-        screen.blit(subtitle_text, subtitle_rect)
-        
-        # Buttons
-        mouse_pos = pygame.mouse.get_pos()
-        for i, (button, rect) in enumerate(zip(buttons, button_rects)):
-            # Button background
-            color = button["color"]
-            if rect.collidepoint(mouse_pos):
-                color = tuple(min(255, c + 40) for c in color)  # Hover effect
-            
-            pygame.draw.rect(screen, color, rect)
-            pygame.draw.rect(screen, (255, 255, 255), rect, 2)  # Border
-            
-            # Button text
-            button_text = font_medium.render(button["text"], True, (255, 255, 255))
-            text_rect = button_text.get_rect(center=rect.center)
-            screen.blit(button_text, text_rect)
-        
-        pygame.display.flip()
-        clock.tick(60)
-    
-    return selected_option

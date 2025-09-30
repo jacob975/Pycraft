@@ -22,9 +22,6 @@ from __future__ import annotations
 import time
 from typing import Dict, Tuple, List, Optional
 import numpy as np
-from itertools import compress
-from concurrent.futures import ThreadPoolExecutor
-import multiprocessing as mp
 
 from .world import World, Chunk
 from .camera import Camera
@@ -118,12 +115,6 @@ class GPURenderer:
         self.use_numpy_optimization = True
             
         print(f"🚀 ModernGL GPU Renderer initialized - Screen: {self.screen_width}x{self.screen_height}")
-        # Thread pool for chunk processing
-        self.thread_pool = ThreadPoolExecutor(max_workers=min(8, mp.cpu_count()))
-        self.use_threading = True
-        
-        print(f"🚀 Initialized with {self.thread_pool._max_workers} worker threads")
-
 
     # ------------------------------------------------------------------
     # Initialization methods
@@ -443,10 +434,9 @@ class GPURenderer:
         
         # Determine render limits based on performance mode 
         max_blocks = MAX_BLOCKS if performance_mode else MAX_BLOCKS * 2
-        render_distance = RENDER_DISTANCE
         
         # Get visible chunks using optimized culling
-        visible_chunks = self._get_optimized_visible_chunks(world, camera, render_distance)
+        visible_chunks = self._get_optimized_visible_chunks(world, camera, RENDER_DISTANCE)
         # Batch process all blocks using NumPy
         block_data = self._prepare_block_data(visible_chunks, camera, max_blocks)
         if len(block_data['positions']) > 0:
@@ -551,7 +541,8 @@ class GPURenderer:
         # Get chunks with distance-based culling
         return world.get_visible_chunks(
             int(camera.position[0]), int(camera.position[2]), 
-            render_distance=render_distance
+            render_distance=render_distance,
+            to_create=False  # Only get already loaded chunks
         )
 
     def _render_ui_moderngl(self, world: World, camera: Camera):

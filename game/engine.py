@@ -5,12 +5,18 @@ Core game engine and main game loop for Pycraft
 import pygame
 import sys
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional
+import threading
+import logging
 from .world import World
 from .player import Player
 from .blocks import BlockType
 from .menu import show_pause_menu
 from .saves import apply_player_state, apply_world_state, save_game
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 from config import *
 
 # Try to import GPU renderer
@@ -27,7 +33,8 @@ class GameEngine:
     """Main game engine handling the game loop and coordination"""
     
     def __init__(self, width: int = 1024, height: int = 768, use_gpu: bool = True,
-                 screen: pygame.Surface = None, load_state: Optional[Dict[str, Any]] = None):
+                 screen: pygame.Surface = None, load_state: Optional[Dict[str, Any]] = None,
+                 progress_callback: Optional[Callable[[str], None]] = None):
         # Initialize Pygame if not already done
         if not pygame.get_init():
             pygame.init()
@@ -44,32 +51,31 @@ class GameEngine:
         self.external_screen = screen
         self._load_state: Optional[Dict[str, Any]] = load_state
         self.loaded_metadata: Optional[Dict[str, Any]] = load_state.get("metadata") if load_state else None
-        
+        self._progress_callback = progress_callback
+
         # Initialize game components
         world_seed = None
         if load_state and isinstance(load_state.get("world"), dict):
             world_seed = load_state["world"].get("seed")
         self.world = World(seed=world_seed, use_multiprocessing=True)
-        
-        # Choose renderer based on availability and preference
-        if self.use_gpu:
-            self.renderer = GPURenderer(width, height, self.external_screen)
-            print("使用GPU渲染器 - OpenGL硬體加速")
+        self._report_progress("World generator ready")
+
+        world_state = load_state.get("world") if load_state else None
+        if world_state:
+            apply_world_state(self.world, world_state)
+            world_message = "Saved terrain restored"
         else:
-            raise NotImplementedError("CPU渲染器尚未實作")
-        # Determine spawn position
+            world_message = "Preparing initial terrain"
+        self._report_progress(world_message)
+
+        self._chunk_reload_distance = max(0, RELOAD_DISTANCE)
+        player_state = load_state.get("player") if load_state else None
+
         spawn_x, spawn_z = 8, 8
         ground_y = 30
-        spawn_position: Tuple[float, float, float]
-
-        if load_state:
-            apply_world_state(self.world, load_state.get("world", {}))
-            player_state = load_state.get("player") or {}
-            position = player_state.get("position")
-            if isinstance(position, (list, tuple)) and len(position) == 3:
-                spawn_position = (float(position[0]), float(position[1]), float(position[2]))
-            else:
-                spawn_position = (spawn_x, ground_y, spawn_z)
+        position = player_state.get("position") if player_state else None
+        if isinstance(position, (list, tuple)) and len(position) == 3:
+            spawn_position = (float(position[0]), float(position[1]), float(position[2]))
         else:
             for y in range(60, 20, -1):
                 block = self.world.get_block(spawn_x, y, spawn_z)
@@ -78,20 +84,36 @@ class GameEngine:
                     break
             spawn_position = (spawn_x, ground_y, spawn_z)
             print(f"玩家生成位置: ({spawn_x}, {ground_y}, {spawn_z})")
-        
+        self._report_progress("Spawn point locked")
+
         self.player = Player(self.world, spawn_position=spawn_position)
-        if load_state:
-            apply_player_state(self.player, load_state.get("player", {}))
+        self._report_progress("Player initialized")
+
+        if player_state:
+            apply_player_state(self.player, player_state)
+            player_message = "Player state restored"
         else:
             # Set camera to look slightly down to see the ground
             self.player.camera.pitch = -0.4  # Look down about 23 degrees
             self.player.camera.yaw = 0.0     # Face forward
-        
+            player_message = "Calibrated player view"
+        self._report_progress(player_message)
+
         if self.loaded_metadata:
             save_name = self.loaded_metadata.get("name") or self.loaded_metadata.get("id")
             print(f"載入存檔: {save_name}")
         elif load_state:
             print("載入存檔: 未命名存檔")
+
+        self._chunk_reload_thread = threading.Thread(
+            target=self._preload_chunks_around_player, 
+            args=(self._chunk_reload_distance,)
+        )
+        self._chunk_reload_thread.start()
+
+        self.renderer_preference = 'gpu' if self.use_gpu else 'cpu'
+        if self.loaded_metadata and self.loaded_metadata.get("renderer"):
+            self.renderer_preference = self.loaded_metadata.get("renderer")
         
         # Don't enable mouse lock by default - let user press Tab to enable
         # self.player.toggle_mouse_lock()
@@ -119,15 +141,33 @@ class GameEngine:
         # Ephemeral message overlay (e.g., for F3/F4 feedback)
         self._message_text = None
         self._message_expire = 0.0
-        # Renderer preference flag
-        self.renderer_preference = 'gpu' if self.use_gpu else 'cpu'
-        if self.loaded_metadata and self.loaded_metadata.get("renderer"):
-            self.renderer_preference = self.loaded_metadata.get("renderer")
+        
+        self._report_progress("Configuring renderer")
+        # Choose renderer based on availability and preference
+        if self.use_gpu:
+            self.renderer = GPURenderer(width, height, self.external_screen)
+            print("使用GPU渲染器 - OpenGL硬體加速")
+        else:
+            raise NotImplementedError("CPU渲染器尚未實作")
+
+        # Loading UI is no longer needed once initialization completes
+        self._progress_callback = None
     
+    def _report_progress(self, message: str) -> None:
+        if not self._progress_callback:
+            return
+        try:
+            self._progress_callback(message)
+        except Exception:
+            # Loading UI is non-critical; ignore reporting failures
+            pass
+
     def handle_events(self):
         """Handle all pygame events"""
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                # Kill the thread anyway
+                self._chunk_reload_thread.join(timeout=1.0)
                 self.running = False
             
             elif event.type == pygame.KEYDOWN:
@@ -170,6 +210,28 @@ class GameEngine:
         
         # Update frame count for performance tracking
         self.frame_count += 1
+
+    def _preload_chunks_around_player(self, reload_distance: int = 2) -> None:
+        """Ensure the player's current and surrounding chunks stay loaded."""
+        while True:
+            st_time = time.time()
+
+            # End condition
+            if self.running is False:
+                return
+
+            pos = self.player.camera.position
+            #logging.info(f"Player position: {pos}")
+            chunk_x, chunk_z = self.world.get_chunk_coords(int(pos[0]), int(pos[2]))
+
+            for dx in range(-reload_distance, reload_distance + 1):
+                for dz in range(-reload_distance, reload_distance + 1):
+                    cx, cz = chunk_x + dx, chunk_z + dz
+                    if (cx, cz) not in self.world.chunks:
+                        #logger.info(f"Loading chunk ({cx}, {cz}) around player")
+                        self.world.get_or_create_chunk(cx, cz)
+            elapsed = time.time() - st_time
+            time.sleep(1 - min(elapsed, 1.0))  # Ensure at least 1 second interval
     
     def draw_debug_info(self):
         """Draw debug information"""

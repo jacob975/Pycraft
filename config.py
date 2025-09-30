@@ -15,6 +15,7 @@ FPS = 60
 # World settings
 CHUNK_SIZE = 16  # Width and depth of a chunk in blocks
 RENDER_DISTANCE = 8  # How far the player can see in blocks
+RELOAD_DISTANCE = 12  # Distance in chunks to trigger loading/unloading
 MAX_BLOCKS = 40960  # Max blocks to render for performance
 PLAYER_HAND_REACH = 5  # How far the player can reach to place/break blocks
 PLAYER_SPEED = 7.0  # Blocks per second # TODO: TO BE IMPLEMENTED

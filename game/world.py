@@ -120,7 +120,6 @@ class Chunk:
         # Cache the result
         self._visible_faces_cache = result
         self._cache_dirty = False
-        print(f"Chunk ({self.x}, {self.z}) visible faces computed in {time.time() - st:.3f}s, {len(positions)} blocks")
         return result
 
     def generate_terrain(self):
@@ -265,8 +264,8 @@ class World:
     
     def get_chunk_coords(self, world_x: int, world_z: int) -> Tuple[int, int]:
         """Convert world coordinates to chunk coordinates"""
-        chunk_x = math.floor(world_x / Chunk.SIZE)
-        chunk_z = math.floor(world_z / Chunk.SIZE)
+        chunk_x = np.round(world_x / Chunk.SIZE).astype(int)
+        chunk_z = np.round(world_z / Chunk.SIZE).astype(int)
         return (chunk_x, chunk_z)
     
     def get_local_coords(self, world_x: int, world_y: int, world_z: int) -> Tuple[int, int, int]:
@@ -274,22 +273,23 @@ class World:
         local_x = world_x % Chunk.SIZE
         local_z = world_z % Chunk.SIZE
         return (local_x, world_y, local_z)
-    
+
     def get_or_create_chunk(self, chunk_x: int, chunk_z: int) -> Chunk:
         """Get existing chunk or create new one"""
         chunk_coords = (chunk_x, chunk_z)
         
         if chunk_coords not in self.chunks:
+            # Create and generate new chunk
             chunk = Chunk(chunk_x, chunk_z)
             chunk.generate_terrain()
             self.chunks[chunk_coords] = chunk
-        
+
         return self.chunks[chunk_coords]
     
     def get_chunk(self, chunk_x: int, chunk_z: int) -> Optional[Chunk]:
         """Get existing chunk without creating it"""
         chunk_coords = (chunk_x, chunk_z)
-        return self.chunks.get(chunk_coords, None)
+        return self.chunks.get(chunk_coords, Chunk(chunk_x, chunk_z))
     
     def get_block(self, world_x: int, world_y: int, world_z: int) -> Block:
         """Get block at world coordinates"""
@@ -313,7 +313,7 @@ class World:
         local_x, local_y, local_z = self.get_local_coords(world_x, world_y, world_z)
         chunk.set_block(local_x, local_y, local_z, block_type)
 
-    def get_visible_chunks(self, center_x: int, center_z: int, render_distance: int = 2) -> List[Chunk]:
+    def get_visible_chunks(self, center_x: int, center_z: int, render_distance: int = 2, to_create: bool = True) -> List[Chunk]:
         """Get list of chunks that should be visible/loaded, sorted by distance from center"""
         visible_chunks = []
 
@@ -336,7 +336,10 @@ class World:
                 # Only load chunks within circular distance
                 distance = math.sqrt(dx*dx + dz*dz)
                 if distance <= render_distance:
-                    chunk = self.get_or_create_chunk(chunk_x, chunk_z)
+                    if to_create:
+                        chunk = self.get_or_create_chunk(chunk_x, chunk_z)
+                    else:
+                        chunk = self.get_chunk(chunk_x, chunk_z)
                     chunk_distance_pairs.append((chunk, distance))
 
         # Sort by distance (closest first)

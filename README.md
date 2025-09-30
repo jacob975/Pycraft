@@ -10,6 +10,7 @@ A simple Minecraft-like voxel game built with Python and Pygame.
 - First-person camera movement
 - Basic chunk system
 - Save and load worlds via the main menu
+- Loading screen with progress feedback when starting a world
 
 ## Installation
 
