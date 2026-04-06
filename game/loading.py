@@ -27,6 +27,7 @@ class LoadingScreen:
         title: str = "Loading...",
         total_steps: int = 6,
         colors: LoadingColors | None = None,
+        surface: pygame.Surface | None = None,
     ) -> None:
         self.width, self.height = size
         self.total_steps = max(1, total_steps)
@@ -36,9 +37,16 @@ class LoadingScreen:
         self.colors = colors or LoadingColors()
         self.active = True
 
-        # Switch display to a simple pygame surface for loading feedback
-        self.surface = pygame.display.set_mode((self.width, self.height))
+        # Reuse existing display surface when available to avoid costly mode switches.
+        current_surface = surface or pygame.display.get_surface()
+        if current_surface is None:
+            self.surface = pygame.display.set_mode((self.width, self.height))
+        else:
+            self.surface = current_surface
         pygame.display.set_caption(title)
+
+        # 2D surface rendering is unavailable on OpenGL display surfaces.
+        self._can_draw_2d = not bool(self.surface.get_flags() & pygame.OPENGL)
 
         # Fonts (pygame.font is expected to be initialised by caller)
         self.title_font = pygame.font.Font(None, 52)
@@ -84,6 +92,10 @@ class LoadingScreen:
     def _render(self, initial: bool = False) -> None:
         """Render the loading screen to the current pygame surface."""
         if not self.active or not self.surface:
+            return
+
+        if not self._can_draw_2d:
+            pygame.event.pump()
             return
 
         current_surface = pygame.display.get_surface()

@@ -70,6 +70,7 @@ class ModernGLMenu:
         self.height = height
         self.running = True
         self.selected_option = None
+        self._text_texture_cache: Dict[Tuple[str, int, Tuple[int, int, int], bool], Tuple[mgl.Texture, int, int]] = {}
         
         # Initialize ModernGL context
         self._init_moderngl_context(screen)
@@ -322,6 +323,21 @@ class ModernGLMenu:
         self.quad_vbo = self.ctx.buffer(quad_vertices.tobytes())
         self.quad_ibo = self.ctx.buffer(quad_indices.tobytes())
         self.tex_quad_vbo = self.ctx.buffer(tex_quad_vertices.tobytes())
+
+        # Reusable VAO for textured quad rendering.
+        self.texture_vao = self.ctx.vertex_array(
+            self.texture_shader,
+            [(self.tex_quad_vbo, '2f 2f', 'position', 'texcoord')],
+            self.quad_ibo
+        )
+
+        # Reusable dynamic VBO/VAO for colored quads (buttons, borders, rects).
+        self.dynamic_rect_vbo = self.ctx.buffer(reserve=4 * 5 * 4, dynamic=True)
+        self.dynamic_rect_vao = self.ctx.vertex_array(
+            self.rect_shader,
+            [(self.dynamic_rect_vbo, '2f 3f', 'position', 'color')],
+            self.quad_ibo
+        )
         
         # Fullscreen quad for background
         fullscreen_vertices = np.array([
@@ -332,6 +348,12 @@ class ModernGLMenu:
         ], dtype=np.float32)
         
         self.fullscreen_vbo = self.ctx.buffer(fullscreen_vertices.tobytes())
+
+        self.gradient_vao = self.ctx.vertex_array(
+            self.gradient_shader,
+            [(self.fullscreen_vbo, '2f', 'position')],
+            self.quad_ibo
+        )
         
         print("✅ Menu geometry buffers created")
     
@@ -438,16 +460,8 @@ class ModernGLMenu:
         self.gradient_shader['ortho_matrix'].write(self.ortho_matrix.T.tobytes())
         self.gradient_shader['screen_size'].write(np.array([self.width, self.height], dtype=np.float32).tobytes())
         self.gradient_shader['time'].write(np.array([self.title_time], dtype=np.float32).tobytes())
-        
-        # Create VAO for fullscreen quad
-        vao = self.ctx.vertex_array(
-            self.gradient_shader,
-            [(self.fullscreen_vbo, '2f', 'position')],
-            self.quad_ibo
-        )
-        
-        vao.render()
-        vao.release()
+
+        self.gradient_vao.render()
     
     def _render_buttons(self):
         """Render all buttons using ModernGL"""
@@ -474,7 +488,6 @@ class ModernGLMenu:
         self.rect_shader['scale'].write(np.array([button.state.width, button.state.height], dtype=np.float32).tobytes())
         self.rect_shader['alpha'].write(np.array([1.0], dtype=np.float32).tobytes())
         
-        # Create VAO with color data
         button_vertices = np.array([
             # Position, Color
             0.0, 0.0, norm_color[0], norm_color[1], norm_color[2],
@@ -482,18 +495,9 @@ class ModernGLMenu:
             1.0, 1.0, norm_color[0], norm_color[1], norm_color[2],
             0.0, 1.0, norm_color[0], norm_color[1], norm_color[2],
         ], dtype=np.float32)
-        
-        button_vbo = self.ctx.buffer(button_vertices.tobytes())
-        
-        vao = self.ctx.vertex_array(
-            self.rect_shader,
-            [(button_vbo, '2f 3f', 'position', 'color')],
-            self.quad_ibo
-        )
-        
-        vao.render()
-        vao.release()
-        button_vbo.release()
+
+        self.dynamic_rect_vbo.write(button_vertices.tobytes())
+        self.dynamic_rect_vao.render()
         
         # Draw button border
         self._render_button_border(button)
@@ -529,8 +533,10 @@ class ModernGLMenu:
     
     def _render_rect(self, x: int, y: int, width: int, height: int, color: np.ndarray):
         """Render a solid color rectangle"""
+        self.rect_shader['ortho_matrix'].write(self.ortho_matrix.T.tobytes())
         self.rect_shader['offset'].write(np.array([x, y], dtype=np.float32).tobytes())
         self.rect_shader['scale'].write(np.array([width, height], dtype=np.float32).tobytes())
+        self.rect_shader['alpha'].write(np.array([1.0], dtype=np.float32).tobytes())
         
         rect_vertices = np.array([
             0.0, 0.0, color[0], color[1], color[2],
@@ -539,42 +545,32 @@ class ModernGLMenu:
             0.0, 1.0, color[0], color[1], color[2],
         ], dtype=np.float32)
         
-        rect_vbo = self.ctx.buffer(rect_vertices.tobytes())
-        vao = self.ctx.vertex_array(
-            self.rect_shader,
-            [(rect_vbo, '2f 3f', 'position', 'color')],
-            self.quad_ibo
-        )
-        
-        vao.render()
-        vao.release()
-        rect_vbo.release()
+        self.dynamic_rect_vbo.write(rect_vertices.tobytes())
+        self.dynamic_rect_vao.render()
     
     def _render_button_text(self, button: ModernGLButton):
         """Render button text using texture"""
         try:
-            font_mgr = get_font_manager()
-            font = font_mgr.get_font(button.state.font_size)
-            text_surface = font.render(button.state.text, True, button.state.color)
-            
-            if text_surface.get_width() == 0 or text_surface.get_height() == 0:
+            texture_data = self._get_or_create_text_texture(
+                button.state.text,
+                button.state.font_size,
+                button.state.color,
+                bold=False,
+            )
+            if texture_data is None:
                 return
-            
-            # Create texture from text surface
-            texture = self._create_texture_from_surface(text_surface)
+            texture, text_width, text_height = texture_data
             
             # Center text on button
-            text_x = button.state.x + (button.state.width - text_surface.get_width()) // 2
-            text_y = button.state.y + (button.state.height - text_surface.get_height()) // 2
+            text_x = button.state.x + (button.state.width - text_width) // 2
+            text_y = button.state.y + (button.state.height - text_height) // 2
             
             # Render text texture
             self._render_texture(
                 texture, text_x, text_y,
-                text_surface.get_width(), text_surface.get_height(),
+                text_width, text_height,
                 np.array([1.0, 1.0, 1.0], dtype=np.float32)
             )
-            
-            texture.release()
             
         except Exception as e:
             print(f"Text rendering error for button '{button.state.text}': {e}")
@@ -624,25 +620,24 @@ class ModernGLMenu:
     def _render_subtitle(self):
         """Render subtitle text"""
         try:
-            font_mgr = get_font_manager()
-            font = font_mgr.get_font(24)
-            subtitle_surface = font.render("A Minecraft-like Adventure", True, (200, 200, 200))
-            
-            if subtitle_surface.get_width() == 0:
+            texture_data = self._get_or_create_text_texture(
+                "A Minecraft-like Adventure",
+                24,
+                (200, 200, 200),
+                bold=False,
+            )
+            if texture_data is None:
                 return
+            texture, subtitle_width, subtitle_height = texture_data
             
-            texture = self._create_texture_from_surface(subtitle_surface)
-            
-            subtitle_x = self.width // 2 - subtitle_surface.get_width() // 2
+            subtitle_x = self.width // 2 - subtitle_width // 2
             subtitle_y = 200
             
             self._render_texture(
                 texture, subtitle_x, subtitle_y,
-                subtitle_surface.get_width(), subtitle_surface.get_height(),
+                subtitle_width, subtitle_height,
                 np.array([1.0, 1.0, 1.0], dtype=np.float32)
             )
-            
-            texture.release()
             
         except Exception as e:
             print(f"Subtitle rendering error: {e}")
@@ -650,22 +645,23 @@ class ModernGLMenu:
     def _render_ui_info(self):
         """Render version info and instructions"""
         try:
-            font_mgr = get_font_manager()
-            
             # Version info
-            version_font = font_mgr.get_font(16)
-            version_surface = version_font.render(f"Version {VERSION}", True, (150, 150, 150))
-            
-            if version_surface.get_width() > 0:
-                texture = self._create_texture_from_surface(version_surface)
+            version_text = f"Version {VERSION}"
+            version_texture_data = self._get_or_create_text_texture(
+                version_text,
+                16,
+                (150, 150, 150),
+                bold=False,
+            )
+            if version_texture_data is not None:
+                texture, version_width, version_height = version_texture_data
                 self._render_texture(
                     texture,
-                    self.width - version_surface.get_width() - 10,
-                    self.height - version_surface.get_height() - 10,
-                    version_surface.get_width(), version_surface.get_height(),
+                    self.width - version_width - 10,
+                    self.height - version_height - 10,
+                    version_width, version_height,
                     np.array([1.0, 1.0, 1.0], dtype=np.float32)
                 )
-                texture.release()
             
             # Instructions
             instructions = [
@@ -674,21 +670,24 @@ class ModernGLMenu:
                 "Press ESC to exit"
             ]
             
-            inst_font = font_mgr.get_font(16)
             y_offset = self.height - 100
             
             for instruction in instructions:
-                inst_surface = inst_font.render(instruction, True, (120, 120, 120))
-                if inst_surface.get_width() > 0:
-                    texture = self._create_texture_from_surface(inst_surface)
-                    inst_x = self.width // 2 - inst_surface.get_width() // 2
-                    
+                instruction_texture_data = self._get_or_create_text_texture(
+                    instruction,
+                    16,
+                    (120, 120, 120),
+                    bold=False,
+                )
+                if instruction_texture_data is not None:
+                    texture, inst_width, inst_height = instruction_texture_data
+                    inst_x = self.width // 2 - inst_width // 2
+
                     self._render_texture(
                         texture, inst_x, y_offset,
-                        inst_surface.get_width(), inst_surface.get_height(),
+                        inst_width, inst_height,
                         np.array([1.0, 1.0, 1.0], dtype=np.float32)
                     )
-                    texture.release()
                     y_offset += 20
             
         except Exception as e:
@@ -705,6 +704,31 @@ class ModernGLMenu:
         texture.write(data)
         
         return texture
+
+    def _get_or_create_text_texture(
+        self,
+        text: str,
+        font_size: int,
+        color: Tuple[int, int, int],
+        bold: bool = False,
+    ) -> Optional[Tuple[mgl.Texture, int, int]]:
+        """Create and cache static text textures to avoid per-frame GPU allocations."""
+        cache_key = (text, font_size, color, bold)
+        cached = self._text_texture_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        font_mgr = get_font_manager()
+        font = font_mgr.get_font(font_size, bold=bold)
+        text_surface = font.render(text, True, color)
+        width, height = text_surface.get_size()
+        if width == 0 or height == 0:
+            return None
+
+        texture = self._create_texture_from_surface(text_surface)
+        cached_entry = (texture, width, height)
+        self._text_texture_cache[cache_key] = cached_entry
+        return cached_entry
     
     def _render_texture(self, texture, x: int, y: int, width: int, height: int, color: np.ndarray):
         """Render a texture at specified position"""
@@ -717,16 +741,9 @@ class ModernGLMenu:
         # Bind texture
         texture.use(0)
         self.texture_shader['texture_sampler'].value = 0
-        
+
         # Render quad
-        vao = self.ctx.vertex_array(
-            self.texture_shader,
-            [(self.tex_quad_vbo, '2f 2f', 'position', 'texcoord')],
-            self.quad_ibo
-        )
-        
-        vao.render()
-        vao.release()
+        self.texture_vao.render()
     
     def run(self) -> Optional[str]:
         """Run the menu and return the selected option"""
@@ -761,12 +778,23 @@ class ModernGLMenu:
     def _cleanup(self):
         """Clean up ModernGL resources"""
         try:
+            for texture, _, _ in self._text_texture_cache.values():
+                texture.release()
+            self._text_texture_cache.clear()
+            if hasattr(self, 'texture_vao'):
+                self.texture_vao.release()
+            if hasattr(self, 'dynamic_rect_vao'):
+                self.dynamic_rect_vao.release()
+            if hasattr(self, 'gradient_vao'):
+                self.gradient_vao.release()
             if hasattr(self, 'quad_vbo'):
                 self.quad_vbo.release()
             if hasattr(self, 'quad_ibo'):
                 self.quad_ibo.release()
             if hasattr(self, 'tex_quad_vbo'):
                 self.tex_quad_vbo.release()
+            if hasattr(self, 'dynamic_rect_vbo'):
+                self.dynamic_rect_vbo.release()
             if hasattr(self, 'fullscreen_vbo'):
                 self.fullscreen_vbo.release()
             print("✅ ModernGL resources cleaned up")

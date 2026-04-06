@@ -291,14 +291,19 @@ class GPURenderer:
     
     def _init_moderngl_context(self):
         """Initialize ModernGL context and pygame window"""
+        reused_surface = False
         if self.existing_screen is not None:
-            # Reuse existing pygame screen but switch to OpenGL mode
-            # We need to recreate the surface with OpenGL flags
-            flags = pygame.OPENGL | pygame.DOUBLEBUF
-            pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
-            self.screen = pygame.display.set_mode((self.screen_width, self.screen_height), flags)
-            pygame.display.set_caption("Pycraft - ModernGL GPU Renderer")
-        else:
+            try:
+                has_opengl = bool(self.existing_screen.get_flags() & pygame.OPENGL)
+                same_size = self.existing_screen.get_size() == (self.screen_width, self.screen_height)
+                if has_opengl and same_size:
+                    self.screen = self.existing_screen
+                    pygame.display.set_caption("Pycraft - ModernGL GPU Renderer")
+                    reused_surface = True
+            except pygame.error:
+                reused_surface = False
+
+        if not reused_surface:
             # Create OpenGL-enabled window for ModernGL with proper depth buffer
             flags = pygame.OPENGL | pygame.DOUBLEBUF
             # Request depth buffer

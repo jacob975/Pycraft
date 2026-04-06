@@ -5,7 +5,7 @@
 import pygame
 import os
 import sys
-from typing import Dict
+from typing import Optional
 
 try:
     from OpenGL.GL import (
@@ -32,47 +32,103 @@ class FontManager:
     
     def _init_fonts(self):
         """初始化字體"""
-        # 嘗試找到支持中文的系統字體
+        # 支持多平台的 CJK 字體候選清單
         chinese_font_names = [
-            "SimHei",           # 黑體 (Windows)
-            "Microsoft YaHei", # 微軟雅黑 (Windows)
-            "SimSun",          # 宋體 (Windows)
-            "PingFang SC",     # 蘋方 (macOS)
-            "STHeiti",         # 華文黑體 (macOS)
-            "Noto Sans CJK SC", # Noto Sans (Linux)
-            "WenQuanYi Micro Hei", # 文泉驛微米黑 (Linux)
+            "PingFang TC",          # 蘋方繁中 (macOS)
+            "PingFang SC",          # 蘋方簡中 (macOS)
+            "Hiragino Sans GB",     # 冬青黑體簡中 (macOS)
+            "Heiti TC",             # 黑體繁中 (macOS)
+            "STHeiti",              # 華文黑體 (macOS)
+            "Songti SC",            # 宋體 (macOS)
+            "Microsoft JhengHei",   # 微軟正黑體 (Windows)
+            "Microsoft YaHei",      # 微軟雅黑 (Windows)
+            "SimHei",               # 黑體 (Windows)
+            "SimSun",               # 宋體 (Windows)
+            "Noto Sans CJK TC",     # Noto CJK 繁中
+            "Noto Sans CJK SC",     # Noto CJK 簡中
+            "WenQuanYi Micro Hei",  # 文泉驛微米黑 (Linux)
+            "Arial Unicode MS",     # Unicode 備援
         ]
-        
-        # Windows系統字體路径
+
         windows_font_paths = [
+            "C:/Windows/Fonts/msjh.ttc",        # 微軟正黑體
+            "C:/Windows/Fonts/msyh.ttc",        # 微軟雅黑
             "C:/Windows/Fonts/simhei.ttf",      # 黑體
-            "C:/Windows/Fonts/msyh.ttf",        # 微軟雅黑
             "C:/Windows/Fonts/simsun.ttc",      # 宋體
             "C:/Windows/Fonts/simkai.ttf",      # 楷體
         ]
-        
-        # 首先嘗試從文件路径加載字體
-        for font_path in windows_font_paths:
+
+        macos_font_paths = [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+            os.path.expanduser("~/Library/Fonts/NotoSansCJKtc-Regular.otf"),
+            os.path.expanduser("~/Library/Fonts/NotoSansCJKsc-Regular.otf"),
+        ]
+
+        linux_font_paths = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/arphic/ukai.ttc",
+        ]
+
+        if sys.platform.startswith("win"):
+            font_paths = windows_font_paths
+        elif sys.platform == "darwin":
+            font_paths = macos_font_paths
+        else:
+            font_paths = linux_font_paths
+
+        # 先嘗試直接使用已知字體文件路徑
+        for font_path in font_paths:
             if os.path.exists(font_path):
-                try:
-                    self.chinese_font = font_path
-                    print(f"找到中文字體: {font_path}")
-                    break
-                except:
-                    continue
-        
-        # 如果找不到文件路径，嘗試系統字體名稱
+                self.chinese_font = font_path
+                print(f"找到中文字體文件: {font_path}")
+                break
+
+        # 路徑找不到時，再嘗試以系統字體名稱查找
         if not self.chinese_font:
-            for font_name in chinese_font_names:
-                if font_name in pygame.font.get_fonts():
-                    self.chinese_font = font_name
-                    print(f"找到系統中文字體: {font_name}")
-                    break
+            matched_font = self._find_system_font(chinese_font_names)
+            if matched_font:
+                self.chinese_font = matched_font
+                print(f"找到系統中文字體: {matched_font}")
         
         # 如果還是找不到，使用默認字體
         if not self.chinese_font:
             print("警告: 未找到中文字體，將使用默認字體 (中文可能顯示為方塊)")
             self.chinese_font = None
+
+    @staticmethod
+    def _normalize_font_name(font_name: str) -> str:
+        """將字體名稱正規化，對齊 pygame.font.get_fonts() 的格式。"""
+        return "".join(ch for ch in font_name.lower() if ch.isalnum())
+
+    def _find_system_font(self, font_names: list[str]) -> Optional[str]:
+        """從系統字體中找出第一個可用字體，回傳字體路徑或系統名稱。"""
+        try:
+            available_fonts = pygame.font.get_fonts()
+        except Exception:
+            available_fonts = []
+
+        normalized_map = {
+            self._normalize_font_name(name): name
+            for name in available_fonts
+        }
+
+        for font_name in font_names:
+            # match_font 可回傳實際字體檔案路徑（跨平台最可靠）
+            matched_path = pygame.font.match_font(font_name)
+            if matched_path and os.path.exists(matched_path):
+                return matched_path
+
+            normalized_name = self._normalize_font_name(font_name)
+            if normalized_name in normalized_map:
+                return normalized_map[normalized_name]
+
+        return None
     
     def get_font(self, size=32, bold=False) -> pygame.font.Font:
         """獲取字體對象"""

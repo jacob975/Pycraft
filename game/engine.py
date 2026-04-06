@@ -29,12 +29,92 @@ except ImportError as e:
     print(f"GPU渲染器不可用: {e}")
     print("使用CPU渲染器")
 
+
+def build_game_bootstrap(
+    load_state: Optional[Dict[str, Any]] = None,
+    use_gpu: bool = True,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Build heavy world/player startup data that is safe to prepare off the main render path."""
+
+    def report(message: str) -> None:
+        if not progress_callback:
+            return
+        try:
+            progress_callback(message)
+        except Exception:
+            pass
+
+    world_seed = None
+    if load_state and isinstance(load_state.get("world"), dict):
+        world_seed = load_state["world"].get("seed")
+
+    world = World(seed=world_seed, use_multiprocessing=True)
+    report("World generator ready")
+
+    world_state = load_state.get("world") if load_state else None
+    if world_state:
+        apply_world_state(world, world_state)
+        world_message = "Saved terrain restored"
+    else:
+        world_message = "Preparing initial terrain"
+    report(world_message)
+
+    player_state = load_state.get("player") if load_state else None
+
+    spawn_x, spawn_z = 8, 8
+    ground_y = 30
+    position = player_state.get("position") if player_state else None
+    if isinstance(position, (list, tuple)) and len(position) == 3:
+        spawn_position = (float(position[0]), float(position[1]), float(position[2]))
+    else:
+        for y in range(60, 20, -1):
+            block = world.get_block(spawn_x, y, spawn_z)
+            if block.is_solid():
+                ground_y = y + 2  # Spawn 2 blocks above solid ground
+                break
+        spawn_position = (spawn_x, ground_y, spawn_z)
+        print(f"玩家生成位置: ({spawn_x}, {ground_y}, {spawn_z})")
+    report("Spawn point locked")
+
+    player = Player(world, spawn_position=spawn_position)
+    report("Player initialized")
+
+    if player_state:
+        apply_player_state(player, player_state)
+        player_message = "Player state restored"
+    else:
+        # Set camera to look slightly down to see the ground
+        player.camera.pitch = -0.4  # Look down about 23 degrees
+        player.camera.yaw = 0.0     # Face forward
+        player_message = "Calibrated player view"
+    report(player_message)
+
+    loaded_metadata: Optional[Dict[str, Any]] = load_state.get("metadata") if load_state else None
+    if loaded_metadata:
+        save_name = loaded_metadata.get("name") or loaded_metadata.get("id")
+        print(f"載入存檔: {save_name}")
+    elif load_state:
+        print("載入存檔: 未命名存檔")
+
+    renderer_preference = 'gpu' if use_gpu else 'cpu'
+    if loaded_metadata and loaded_metadata.get("renderer"):
+        renderer_preference = loaded_metadata.get("renderer")
+
+    return {
+        "world": world,
+        "player": player,
+        "loaded_metadata": loaded_metadata,
+        "renderer_preference": renderer_preference,
+    }
+
 class GameEngine:
     """Main game engine handling the game loop and coordination"""
     
     def __init__(self, width: int = 1024, height: int = 768, use_gpu: bool = True,
                  screen: pygame.Surface = None, load_state: Optional[Dict[str, Any]] = None,
-                 progress_callback: Optional[Callable[[str], None]] = None):
+                 progress_callback: Optional[Callable[[str], None]] = None,
+                 bootstrap_data: Optional[Dict[str, Any]] = None):
         # Initialize Pygame if not already done
         if not pygame.get_init():
             pygame.init()
@@ -50,60 +130,19 @@ class GameEngine:
         # Store screen reference for potential reuse
         self.external_screen = screen
         self._load_state: Optional[Dict[str, Any]] = load_state
-        self.loaded_metadata: Optional[Dict[str, Any]] = load_state.get("metadata") if load_state else None
         self._progress_callback = progress_callback
 
-        # Initialize game components
-        world_seed = None
-        if load_state and isinstance(load_state.get("world"), dict):
-            world_seed = load_state["world"].get("seed")
-        self.world = World(seed=world_seed, use_multiprocessing=True)
-        self._report_progress("World generator ready")
-
-        world_state = load_state.get("world") if load_state else None
-        if world_state:
-            apply_world_state(self.world, world_state)
-            world_message = "Saved terrain restored"
-        else:
-            world_message = "Preparing initial terrain"
-        self._report_progress(world_message)
-
         self._chunk_reload_distance = max(0, RELOAD_DISTANCE)
-        player_state = load_state.get("player") if load_state else None
+        if bootstrap_data is None:
+            bootstrap_data = build_game_bootstrap(
+                load_state=load_state,
+                use_gpu=self.use_gpu,
+                progress_callback=self._report_progress,
+            )
 
-        spawn_x, spawn_z = 8, 8
-        ground_y = 30
-        position = player_state.get("position") if player_state else None
-        if isinstance(position, (list, tuple)) and len(position) == 3:
-            spawn_position = (float(position[0]), float(position[1]), float(position[2]))
-        else:
-            for y in range(60, 20, -1):
-                block = self.world.get_block(spawn_x, y, spawn_z)
-                if block.is_solid():
-                    ground_y = y + 2  # Spawn 2 blocks above solid ground
-                    break
-            spawn_position = (spawn_x, ground_y, spawn_z)
-            print(f"玩家生成位置: ({spawn_x}, {ground_y}, {spawn_z})")
-        self._report_progress("Spawn point locked")
-
-        self.player = Player(self.world, spawn_position=spawn_position)
-        self._report_progress("Player initialized")
-
-        if player_state:
-            apply_player_state(self.player, player_state)
-            player_message = "Player state restored"
-        else:
-            # Set camera to look slightly down to see the ground
-            self.player.camera.pitch = -0.4  # Look down about 23 degrees
-            self.player.camera.yaw = 0.0     # Face forward
-            player_message = "Calibrated player view"
-        self._report_progress(player_message)
-
-        if self.loaded_metadata:
-            save_name = self.loaded_metadata.get("name") or self.loaded_metadata.get("id")
-            print(f"載入存檔: {save_name}")
-        elif load_state:
-            print("載入存檔: 未命名存檔")
+        self.world = bootstrap_data["world"]
+        self.player = bootstrap_data["player"]
+        self.loaded_metadata = bootstrap_data.get("loaded_metadata")
 
         self._chunk_reload_thread = threading.Thread(
             target=self._preload_chunks_around_player, 
@@ -111,9 +150,7 @@ class GameEngine:
         )
         self._chunk_reload_thread.start()
 
-        self.renderer_preference = 'gpu' if self.use_gpu else 'cpu'
-        if self.loaded_metadata and self.loaded_metadata.get("renderer"):
-            self.renderer_preference = self.loaded_metadata.get("renderer")
+        self.renderer_preference = bootstrap_data.get("renderer_preference", 'gpu' if self.use_gpu else 'cpu')
         
         # Enable mouse lock by default so camera look works immediately
         self.player.toggle_mouse_lock()
