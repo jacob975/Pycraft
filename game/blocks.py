@@ -9,10 +9,11 @@ class Block:
     """Represents a single block in the world"""
     _COLORS = BLOCK_COLORS
     _DEFAULT_COLOR = (1, 1, 1)
+    _NON_SOLID_TYPES = {BlockType.AIR, BlockType.TALL_GRASS}
     
     def __init__(self, block_type: BlockType = BlockType.AIR):
         self.type = block_type
-        self.solid = block_type != BlockType.AIR
+        self.solid = block_type not in self._NON_SOLID_TYPES
     
     def is_solid(self) -> bool:
         """Check if the block is solid (not air)"""

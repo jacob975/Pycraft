@@ -301,9 +301,12 @@ class Player:
         for t in np.linspace(1, max_distance, num=int(max_distance * 10)):  # Check every 0.1 units
             pos = start + direction * t
             block_pos = np.round(pos).astype(int).tolist()
-            
-            if self.world.get_block(*block_pos).is_solid():
+
+            target_block = self.world.get_block(*block_pos)
+            if target_block.type != BlockType.AIR:
                 if place_mode:
+                    if not target_block.is_solid():
+                        continue
                     # Return the position just before this solid block
                     prev_t = (t - 0.1) if (t - 0.1) > 0 else 0
                     prev_pos = start + direction * prev_t

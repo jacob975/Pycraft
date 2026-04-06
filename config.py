@@ -39,6 +39,8 @@ class BlockType(Enum):
     WATER = 5
     SAND = 6
     LEAVES = 7
+    TALL_GRASS = 8
+    LEAF = 9
 
 BLOCK_COLORS = {
     BlockType.AIR: (0, 0, 0),
@@ -49,4 +51,11 @@ BLOCK_COLORS = {
     BlockType.WATER: (0, 0, 1),
     BlockType.SAND: (194/255, 178/255, 128/255),
     BlockType.LEAVES: (34/255, 139/255, 34/255),
+    BlockType.TALL_GRASS: (70/255, 170/255, 70/255),
+    BlockType.LEAF: (50/255, 160/255, 50/255),
 }
+
+# Decoration generation
+TALL_GRASS_SPAWN_CHANCE = 0.16
+TALL_GRASS_WIDTH = 1.0
+TALL_GRASS_THICKNESS = 0.04

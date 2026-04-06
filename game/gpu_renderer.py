@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import time
 from typing import Dict, Tuple, List, Optional
+from pathlib import Path
 import numpy as np
 
 from .world import World, Chunk
@@ -121,21 +122,31 @@ class GPURenderer:
         layout(location = 1) in vec3 instance_pos;
         layout(location = 2) in vec3 instance_color;
         layout(location = 3) in float instance_face;
+        layout(location = 4) in float instance_texture_layer;
         
         uniform mat4 projection_matrix;
         uniform mat4 view_matrix;
         uniform vec3 light_dir;
         uniform vec3 camera_pos;
+        uniform float grass_width;
         
         out vec3 color;
         out float fog_factor;
+        out vec2 uv;
+        flat out float texture_layer;
         
-        void get_face_basis(int face_id, out vec3 normal, out vec3 tangent, out vec3 bitangent) {
-            if (face_id == 0) { normal = vec3(0.0, 0.0, -1.0); tangent = vec3(-1.0, 0.0, 0.0); bitangent = vec3(0.0, 1.0, 0.0); }
-            else if (face_id == 1) { normal = vec3(0.0, 0.0, 1.0); tangent = vec3(1.0, 0.0, 0.0); bitangent = vec3(0.0, 1.0, 0.0); }
-            else if (face_id == 2) { normal = vec3(1.0, 0.0, 0.0); tangent = vec3(0.0, 0.0, -1.0); bitangent = vec3(0.0, 1.0, 0.0); }
-            else if (face_id == 3) { normal = vec3(-1.0, 0.0, 0.0); tangent = vec3(0.0, 0.0, 1.0); bitangent = vec3(0.0, 1.0, 0.0); }
-            else if (face_id == 4) { normal = vec3(0.0, 1.0, 0.0); tangent = vec3(1.0, 0.0, 0.0); bitangent = vec3(0.0, 0.0, -1.0); }
+        vec3 rotate_y(vec3 v, float a) {
+            float c = cos(a);
+            float s = sin(a);
+            return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
+        }
+
+        void get_axis_face_basis(int local_face, out vec3 normal, out vec3 tangent, out vec3 bitangent) {
+            if (local_face == 0) { normal = vec3(0.0, 0.0, -1.0); tangent = vec3(-1.0, 0.0, 0.0); bitangent = vec3(0.0, 1.0, 0.0); }
+            else if (local_face == 1) { normal = vec3(0.0, 0.0, 1.0); tangent = vec3(1.0, 0.0, 0.0); bitangent = vec3(0.0, 1.0, 0.0); }
+            else if (local_face == 2) { normal = vec3(1.0, 0.0, 0.0); tangent = vec3(0.0, 0.0, -1.0); bitangent = vec3(0.0, 1.0, 0.0); }
+            else if (local_face == 3) { normal = vec3(-1.0, 0.0, 0.0); tangent = vec3(0.0, 0.0, 1.0); bitangent = vec3(0.0, 1.0, 0.0); }
+            else if (local_face == 4) { normal = vec3(0.0, 1.0, 0.0); tangent = vec3(1.0, 0.0, 0.0); bitangent = vec3(0.0, 0.0, -1.0); }
             else { normal = vec3(0.0, -1.0, 0.0); tangent = vec3(1.0, 0.0, 0.0); bitangent = vec3(0.0, 0.0, 1.0); }
         }
 
@@ -144,19 +155,49 @@ class GPURenderer:
             vec3 normal;
             vec3 tangent;
             vec3 bitangent;
-            get_face_basis(face_id, normal, tangent, bitangent);
+            vec3 center;
+            vec3 world_pos;
 
-            vec3 center = instance_pos + (normal * 0.5);
-            vec3 world_pos = center + tangent * quad_pos.x + bitangent * quad_pos.y;
+            if (face_id <= 5) {
+                get_axis_face_basis(face_id, normal, tangent, bitangent);
+                center = instance_pos + (normal * 0.5);
+                world_pos = center + tangent * quad_pos.x + bitangent * quad_pos.y;
+                uv = quad_pos + vec2(0.5, 0.5);
+            } else {
+                int encoded = face_id - 6;
+                int height_variant = encoded / 2;
+                int plane_idx = encoded % 2;
+
+                float grass_height = 1.0;
+                if (height_variant == 1) grass_height = 0.66;
+                else if (height_variant == 2) grass_height = 0.33;
+
+                float half_height = grass_height * 0.5;
+                float angle = (plane_idx == 0) ? 0.78539816339 : -0.78539816339;
+                normal = rotate_y(vec3(0.0, 0.0, 1.0), angle);
+                tangent = rotate_y(vec3(1.0, 0.0, 0.0), angle);
+                bitangent = vec3(0.0, 1.0, 0.0);
+
+                center = instance_pos + vec3(0.0, -0.5 + half_height, 0.0);
+                world_pos = center + tangent * (quad_pos.x * grass_width) + bitangent * (quad_pos.y * grass_height);
+                uv = quad_pos + vec2(0.5, 0.5);
+            }
+
             gl_Position = projection_matrix * view_matrix * vec4(world_pos, 1.0);
             
             // Simplified lighting for better performance
             float brightness = max(0.6, abs(dot(normal, normalize(-light_dir))));
-            color = instance_color * brightness;
+            if (instance_texture_layer >= 0.0) {
+                // Textured faces should only receive lighting, not block-color tinting.
+                color = vec3(brightness);
+            } else {
+                color = instance_color * brightness;
+            }
             
             // Simplified fog calculation
             float distance = length(world_pos - camera_pos);
             fog_factor = clamp(1.0 - (distance - 40.0) / 60.0, 0.0, 1.0);
+            texture_layer = instance_texture_layer;
         }
         '''
         
@@ -165,14 +206,26 @@ class GPURenderer:
         
         in vec3 color;
         in float fog_factor;
+        in vec2 uv;
+        flat in float texture_layer;
         
         uniform vec3 fog_color;
+        uniform sampler2DArray block_textures;
         
         out vec4 fragColor;
         
         void main() {
-            vec3 final_color = mix(fog_color, color, fog_factor);
-            fragColor = vec4(final_color, 1.0);
+            vec4 sampled = vec4(1.0, 1.0, 1.0, 1.0);
+            if (texture_layer >= 0.0) {
+                sampled = texture(block_textures, vec3(uv, texture_layer));
+                if (sampled.a < 0.1) {
+                    discard;
+                }
+            }
+
+            vec3 lit_color = color * sampled.rgb;
+            vec3 final_color = mix(fog_color, lit_color, fog_factor);
+            fragColor = vec4(final_color, sampled.a);
         }
         '''
         
@@ -180,6 +233,8 @@ class GPURenderer:
             vertex_shader=vertex_shader,
             fragment_shader=fragment_shader
         )
+
+        self._load_block_textures()
         
         # UI shader for crosshair and text
         ui_vertex_shader = '''
@@ -230,8 +285,8 @@ class GPURenderer:
 
         self.face_vbo = self.ctx.buffer(quad_vertices.tobytes())
 
-        # Reusable dynamic instance buffer: [pos.xyz, color.rgb, face_id]
-        self.instance_stride_bytes = 7 * 4
+        # Reusable dynamic instance buffer: [pos.xyz, color.rgb, face_id, texture_layer]
+        self.instance_stride_bytes = 8 * 4
         self.instance_buffer = self.ctx.buffer(
             reserve=self.max_instances * self.instance_stride_bytes,
             dynamic=True,
@@ -241,7 +296,7 @@ class GPURenderer:
             self.block_shader,
             [
                 (self.face_vbo, '2f', 'quad_pos'),
-                (self.instance_buffer, '3f 3f 1f/i', 'instance_pos', 'instance_color', 'instance_face'),
+                (self.instance_buffer, '3f 3f 1f 1f/i', 'instance_pos', 'instance_color', 'instance_face', 'instance_texture_layer'),
             ],
         )
         
@@ -314,9 +369,11 @@ class GPURenderer:
         # Create ModernGL context
         self.ctx = mgl.create_context()
         
-        # Enable depth testing and back-face culling to reduce overdraw
+        # Enable depth testing. Keep culling disabled because crossed vegetation
+        # planes are intentionally single-quad billboards and must be visible
+        # from both sides.
         self.ctx.enable(mgl.DEPTH_TEST)
-        self.ctx.enable(mgl.CULL_FACE)
+        self.ctx.disable(mgl.CULL_FACE)
         
         print("✅ ModernGL context initialized")
     
@@ -410,6 +467,7 @@ class GPURenderer:
         
         # Ensure proper GL state
         self.ctx.enable(mgl.DEPTH_TEST)
+        self.ctx.disable(mgl.CULL_FACE)
         
         # Set viewport to match screen size
         self.ctx.viewport = (0, 0, self.screen_width, self.screen_height)
@@ -449,12 +507,16 @@ class GPURenderer:
         self.block_shader['light_dir'].write(np.array([0.2, -1.0, 0.3], dtype=np.float32).tobytes())
         self.block_shader['camera_pos'].write(np.array(camera.position, dtype=np.float32).tobytes())
         self.block_shader['fog_color'].write(np.array([0.529, 0.808, 0.922], dtype=np.float32).tobytes())
+        self.block_shader['grass_width'].value = TALL_GRASS_WIDTH
+        self.block_texture_array.use(location=0)
+        self.block_shader['block_textures'].value = 0
         
-        # Update reusable instance buffer: [pos.xyz, color.rgb, face_id]
+        # Update reusable instance buffer: [pos.xyz, color.rgb, face_id, texture_layer]
         instance_data = np.column_stack([
             block_data['positions'],
             block_data['colors'],
             block_data['face_ids'].astype(np.float32, copy=False).reshape(-1, 1),
+            block_data['texture_layers'].astype(np.float32, copy=False).reshape(-1, 1),
         ]).astype(np.float32, copy=False)
 
         instance_count = min(face_count, self.max_instances)
@@ -476,6 +538,7 @@ class GPURenderer:
                 'positions': np.empty((0, 3), dtype=np.float32),
                 'colors': np.empty((0, 3), dtype=np.float32),
                 'face_ids': np.empty(0, dtype=np.uint8),
+                'texture_layers': np.empty(0, dtype=np.int8),
                 'total_blocks': 0,
             }
         
@@ -483,6 +546,7 @@ class GPURenderer:
         all_positions = []
         all_colors = []
         all_face_ids = []
+        all_texture_layers = []
         total_blocks = 0
         
         # Batch process chunks with minimal object creation
@@ -497,6 +561,7 @@ class GPURenderer:
                 all_positions.append(visible_data['positions'])
                 all_colors.append(visible_data['colors'])
                 all_face_ids.append(visible_data['face_ids'])
+                all_texture_layers.append(visible_data['texture_layers'])
             
             total_blocks += len(chunk.blocks)
 
@@ -505,10 +570,12 @@ class GPURenderer:
             final_positions = np.concatenate(all_positions, axis=0)[:max_blocks]
             final_colors = np.concatenate(all_colors, axis=0)[:max_blocks]
             final_face_ids = np.concatenate(all_face_ids, axis=0)[:max_blocks]
+            final_texture_layers = np.concatenate(all_texture_layers, axis=0)[:max_blocks]
         else:
             final_positions = np.empty((0, 3), dtype=np.float32)
             final_colors = np.empty((0, 3), dtype=np.float32)
             final_face_ids = np.empty(0, dtype=np.uint8)
+            final_texture_layers = np.empty(0, dtype=np.int8)
 
         # Update stats
         visible_face_count = len(final_positions)
@@ -519,8 +586,39 @@ class GPURenderer:
             'positions': final_positions,
             'colors': final_colors,
             'face_ids': final_face_ids,
+            'texture_layers': final_texture_layers,
             'total_blocks': total_blocks,
         }
+
+    def _load_block_textures(self):
+        """Load tall grass variants and grass side texture into one texture array."""
+        texture_dir = Path(__file__).resolve().parent.parent / 'assets' / 'textures' / 'blocks'
+        texture_paths = [
+            texture_dir / 'tall_grass_1.png',
+            texture_dir / 'tall_grass_2.png',
+            texture_dir / 'tall_grass_3.png',
+            texture_dir / 'grass_side.png',
+        ]
+
+        layers = []
+        for path in texture_paths:
+            if path.exists():
+                image = pygame.image.load(path.as_posix()).convert_alpha()
+            else:
+                # Fallback keeps renderer robust even when texture files are missing.
+                image = pygame.Surface((16, 16), pygame.SRCALPHA, 32)
+                image.fill((255, 255, 255, 255))
+
+            image = pygame.transform.flip(image, False, True)
+            if image.get_size() != (16, 16):
+                image = pygame.transform.smoothscale(image, (16, 16))
+            layers.append(pygame.image.tostring(image, 'RGBA'))
+
+        texture_array_data = b''.join(layers)
+        self.block_texture_array = self.ctx.texture_array((16, 16, 4), 4, texture_array_data)
+        self.block_texture_array.filter = (mgl.NEAREST, mgl.NEAREST)
+        self.block_texture_array.repeat_x = False
+        self.block_texture_array.repeat_y = False
 
     def _get_optimized_visible_chunks(self, world: World, camera: Camera, render_distance: int) -> List[Chunk]:
         # Recompute only when crossing chunk boundaries or world chunk count changes

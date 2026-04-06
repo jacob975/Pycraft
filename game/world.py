@@ -32,6 +32,17 @@ class Chunk:
         # Cache for visible faces to improve performance
         self._visible_faces_cache = None
         self._cache_dirty = True
+        self._world_seed = 0
+
+    def _height_variant(self, x: int, y: int, z: int) -> int:
+        """Pick one of three grass heights deterministically per position."""
+        n = (x * 374761393) ^ (y * 668265263) ^ (z * 2147483647) ^ (self._world_seed * 1274126177)
+        return n % 3
+
+    def _grass_texture_variant(self, x: int, y: int, z: int) -> int:
+        """Pick one of three tall grass textures deterministically per position."""
+        n = (x * 1597334677) ^ (y * 3812015801) ^ (z * 958689641) ^ (self._world_seed * 122949829)
+        return n % 3
 
     def mark_dirty(self):
         """Mark cached face data dirty so it will be rebuilt on next render."""
@@ -65,6 +76,7 @@ class Chunk:
         positions = []
         colors = []
         face_ids = []
+        texture_layers = []
         
         chunk_world_x = self.x * self.SIZE
         chunk_world_z = self.z * self.SIZE
@@ -113,12 +125,45 @@ class Chunk:
                     positions.append(world_pos)
                     colors.append(color_cache.get(block.type, Block._DEFAULT_COLOR))
                     face_ids.append(face_idx)
+                    if block.type == BlockType.GRASS and face_idx <= 3:
+                        # Texture layer 3 is grass side texture in renderer texture array.
+                        texture_layers.append(3)
+                    else:
+                        texture_layers.append(-1)
         
         # Convert to optimized NumPy arrays
+        # Render crossed-strip vegetation after solid faces.
+        for (x, y, z), block in self.blocks.items():
+            if block.type != BlockType.TALL_GRASS:
+                continue
+
+            # Keep grass attached to grass blocks only.
+            if y <= 0:
+                continue
+            below = self.get_block(x, y - 1, z)
+            if below.type != BlockType.GRASS:
+                continue
+
+            world_pos = (x + chunk_world_x, y, z + chunk_world_z)
+            grass_color = color_cache.get(block.type, Block._DEFAULT_COLOR)
+            height_variant = self._height_variant(world_pos[0], y, world_pos[2])
+            texture_variant = self._grass_texture_variant(world_pos[0], y, world_pos[2])
+
+            # TALL_GRASS mesh: 2 crossed vertical planes (X shape).
+            # Face id encoding: 6 + (height_variant * 2) + plane_idx
+            # height_variant: 0->1.0m, 1->0.66m, 2->0.33m
+            face_base = 6 + (height_variant * 2)
+            for plane_idx in range(2):
+                positions.append(world_pos)
+                colors.append(grass_color)
+                face_ids.append(face_base + plane_idx)
+                texture_layers.append(texture_variant)
+
         result = {
             'positions': np.array(positions, dtype=np.float32) if positions else np.empty((0, 3), dtype=np.float32),
             'colors': np.array(colors, dtype=np.float32) if colors else np.empty((0, 3), dtype=np.float32),
-            'face_ids': np.array(face_ids, dtype=np.uint8) if face_ids else np.empty(0, dtype=np.uint8)
+            'face_ids': np.array(face_ids, dtype=np.uint8) if face_ids else np.empty(0, dtype=np.uint8),
+            'texture_layers': np.array(texture_layers, dtype=np.int8) if texture_layers else np.empty(0, dtype=np.int8)
         }
         
         # Cache the result
@@ -126,13 +171,20 @@ class Chunk:
         self._cache_dirty = False
         return result
 
-    def generate_terrain(self):
+    def generate_terrain(self, world_seed: int = 0):
         """Generate terrain for this chunk"""
         if self.generated:
             return
+
+        self._world_seed = world_seed
         
         world_x = self.x * self.SIZE
         world_z = self.z * self.SIZE
+        chunk_rng = random.Random(
+            ((self._world_seed & 0xFFFFFFFF) << 32)
+            ^ ((self.x & 0xFFFFFFFF) * 73856093)
+            ^ ((self.z & 0xFFFFFFFF) * 19349663)
+        )
         
         blocks_generated = 0
         
@@ -172,6 +224,14 @@ class Chunk:
                     surface_block = self.get_block(x, height, z)
                     if surface_block.type == BlockType.GRASS:
                         self._generate_tree(x, height + 1, z)
+
+                # Tall grass: independent random spawn on grass blocks.
+                if height + 1 < 256:
+                    surface_block = self.get_block(x, height, z)
+                    above_block = self.get_block(x, height + 1, z)
+                    if surface_block.type == BlockType.GRASS and above_block.type == BlockType.AIR:
+                        if chunk_rng.random() < TALL_GRASS_SPAWN_CHANCE:
+                            self.set_block(x, height + 1, z, BlockType.TALL_GRASS)
         
         # print(f"Generated {blocks_generated} blocks in chunk ({self.x}, {self.z})")
         self.generated = True
@@ -247,7 +307,7 @@ class Chunk:
                             # Only place leaves if within chunk bounds
                             current_block = self.get_block(leaf_x, leaf_y + dy, leaf_z)
                             if not current_block.is_solid():
-                                self.set_block(leaf_x, leaf_y + dy, leaf_z, BlockType.GRASS)  # Using grass as leaves
+                                self.set_block(leaf_x, leaf_y + dy, leaf_z, BlockType.LEAF)
 
 class World:
     """Game world containing chunks and blocks"""
@@ -311,7 +371,7 @@ class World:
         if chunk_coords not in self.chunks:
             # Create and generate new chunk
             chunk = Chunk(chunk_x, chunk_z)
-            chunk.generate_terrain()
+            chunk.generate_terrain(world_seed=self.seed)
             self.chunks[chunk_coords] = chunk
             # A new neighboring chunk changes border visibility for existing chunks.
             self._mark_adjacent_chunks_dirty_for_chunk(chunk_x, chunk_z)
