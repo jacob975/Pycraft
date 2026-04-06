@@ -92,6 +92,14 @@ class GPURenderer:
         self._cached_chunk_center: Optional[Tuple[int, int]] = None
         self._cached_world_chunk_count = -1
         self._cached_render_distance = -1
+
+        # Cache debug text textures to avoid rebuilding GPU resources every frame.
+        self._text_texture_cache: Dict[Tuple[str, int, Tuple[int, int, int]], Tuple[mgl.Texture, int, int, float]] = {}
+        self._last_debug_text_update = 0.0
+        self._debug_text_update_interval = 0.2
+        self._debug_text_lines: List[Tuple[str, Tuple[int, int, int]]] = []
+        self._last_text_cache_prune = 0.0
+        self._text_cache_ttl_seconds = 3.0
         
         # Initialize ModernGL rendering pipeline
         self._init_moderngl_context()
@@ -406,9 +414,10 @@ class GPURenderer:
         
         # Determine render limits based on performance mode
         max_blocks = MAX_BLOCKS if performance_mode else MAX_BLOCKS * 2
+        render_distance = PERFORMANCE_RENDER_DISTANCE if performance_mode else RENDER_DISTANCE
         
         # Get visible chunks using optimized culling
-        visible_chunks = self._get_optimized_visible_chunks(world, camera, RENDER_DISTANCE)
+        visible_chunks = self._get_optimized_visible_chunks(world, camera, render_distance)
         # Batch process all blocks using NumPy
         block_data = self._prepare_block_data(world, visible_chunks, camera, max_blocks)
         if len(block_data['positions']) > 0:
@@ -618,22 +627,29 @@ class GPURenderer:
         try:
             from .font_manager import get_font_manager
             font_mgr = get_font_manager()
-            
-            # Create pygame surface with text
-            font = font_mgr.get_font(font_size)
-            img = font.render(text, True, color)
-            w, h = img.get_size()
-            
-            if w == 0 or h == 0:
-                return
-            
-            # Generate texture
-            texture = self.ctx.texture((w, h), 4)  # RGBA format
-            texture.filter = (mgl.NEAREST, mgl.NEAREST)
-            
-            # Convert pygame surface to texture data
-            data = pygame.image.tostring(img, "RGBA", True)  # Flip vertically
-            texture.write(data)
+
+            cache_key = (text, font_size, (int(color[0]), int(color[1]), int(color[2])))
+            cache_entry = self._text_texture_cache.get(cache_key)
+            if cache_entry is not None:
+                texture, w, h, _ = cache_entry
+                self._text_texture_cache[cache_key] = (texture, w, h, time.time())
+            else:
+                # Create pygame surface with text
+                font = font_mgr.get_font(font_size)
+                img = font.render(text, True, color)
+                w, h = img.get_size()
+
+                if w == 0 or h == 0:
+                    return
+
+                # Generate texture
+                texture = self.ctx.texture((w, h), 4)  # RGBA format
+                texture.filter = (mgl.NEAREST, mgl.NEAREST)
+
+                # Convert pygame surface to texture data
+                data = pygame.image.tostring(img, "RGBA", True)  # Flip vertically
+                texture.write(data)
+                self._text_texture_cache[cache_key] = (texture, w, h, time.time())
             
             # Create quad vertices for text rendering
             vertices = np.array([
@@ -678,15 +694,26 @@ class GPURenderer:
             
             vao.render()
             
-            # Cleanup
+            # Cleanup transient geometry buffers
             vao.release()
             vbo.release()
             ibo.release()
-            texture.release()
             
         except Exception as e:
             print(f"Text rendering error: {e}")
             pass
+
+    def _prune_text_texture_cache(self):
+        """Release stale text textures to keep GPU memory bounded."""
+        now = time.time()
+        stale_keys = [
+            key
+            for key, (_, _, _, last_used) in self._text_texture_cache.items()
+            if now - last_used > self._text_cache_ttl_seconds
+        ]
+        for key in stale_keys:
+            texture, _, _, _ = self._text_texture_cache.pop(key)
+            texture.release()
 
     def _format_debug_line(self, key: str, value, format_type: str = 'default') -> str:
         """Cache formatted debug strings to reduce string operations"""
@@ -713,6 +740,33 @@ class GPURenderer:
             self.ctx.disable(mgl.DEPTH_TEST)
             self.ctx.enable(mgl.BLEND)
             self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
+
+            now = time.time()
+            if now - self._last_debug_text_update >= self._debug_text_update_interval:
+                fps_text = self._format_debug_line('fps', data.get('fps', 0), 'fps')
+                pos = data.get('position', (0, 0, 0))
+                # Round to reduce noisy updates and texture churn.
+                pos_text = f"Position: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
+                chunk_text = self._format_debug_line('chunk', data.get('chunk', (0,0)), 'chunk')
+                chunks_text = self._format_debug_line('chunks_loaded', data.get('chunks_loaded', 0), 'chunks_loaded')
+                block_text = self._format_debug_line('selected_block', data.get('selected_block', ''), 'selected_block')
+                perf_text = self._format_debug_line('performance', data.get('performance_mode'), 'performance')
+                stats_text = self._format_debug_line('blocks_faces', self.last_stats, 'blocks_faces')
+
+                self._debug_text_lines = [
+                    (fps_text, (255, 255, 0)),
+                    (pos_text, (255, 255, 255)),
+                    (chunk_text, (255, 255, 255)),
+                    (chunks_text, (255, 255, 255)),
+                    (block_text, (255, 255, 255)),
+                    (perf_text, (255, 255, 255)),
+                    (stats_text, (0, 255, 255)),
+                ]
+                self._last_debug_text_update = now
+
+            if now - self._last_text_cache_prune >= 1.0:
+                self._prune_text_texture_cache()
+                self._last_text_cache_prune = now
             
             # Create text shader if not exists
             if not hasattr(self, 'text_shader'):
@@ -721,41 +775,10 @@ class GPURenderer:
             # Render debug information on screen
             y_offset = 10
             line_height = 25
-            
-            # FPS
-            fps_text = self._format_debug_line('fps', data.get('fps', 0), 'fps')
-            self._render_text_texture(fps_text, 10, y_offset, font_size=20, color=(255, 255, 0))
-            y_offset += line_height
-            
-            # Position
-            pos = data.get('position', (0, 0, 0))
-            pos_text = f"Position: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
-            self._render_text_texture(pos_text, 10, y_offset, font_size=20, color=(255, 255, 255))
-            y_offset += line_height
-            
-            # Chunk info
-            chunk_text = self._format_debug_line('chunk', data.get('chunk', (0,0)), 'chunk')
-            self._render_text_texture(chunk_text, 10, y_offset, font_size=20, color=(255, 255, 255))
-            y_offset += line_height
-            
-            # Chunks loaded
-            chunks_text = self._format_debug_line('chunks_loaded', data.get('chunks_loaded', 0), 'chunks_loaded')
-            self._render_text_texture(chunks_text, 10, y_offset, font_size=20, color=(255, 255, 255))
-            y_offset += line_height
-            
-            # Selected block
-            block_text = self._format_debug_line('selected_block', data.get('selected_block', ''), 'selected_block')
-            self._render_text_texture(block_text, 10, y_offset, font_size=20, color=(255, 255, 255))
-            y_offset += line_height
-            
-            # Performance mode
-            perf_text = self._format_debug_line('performance', data.get('performance_mode'), 'performance')
-            self._render_text_texture(perf_text, 10, y_offset, font_size=20, color=(255, 255, 255))
-            y_offset += line_height
-            
-            # Block and face count
-            stats_text = self._format_debug_line('blocks_faces', self.last_stats, 'blocks_faces')
-            self._render_text_texture(stats_text, 10, y_offset, font_size=20, color=(0, 255, 255))
+
+            for line_text, line_color in self._debug_text_lines:
+                self._render_text_texture(line_text, 10, y_offset, font_size=20, color=line_color)
+                y_offset += line_height
             
             # Re-enable depth testing
             self.ctx.disable(mgl.BLEND)

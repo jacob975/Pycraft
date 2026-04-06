@@ -32,7 +32,10 @@ class Chunk:
         # Cache for visible faces to improve performance
         self._visible_faces_cache = None
         self._cache_dirty = True
-        self._cache_world_version = -1
+
+    def mark_dirty(self):
+        """Mark cached face data dirty so it will be rebuilt on next render."""
+        self._cache_dirty = True
     
     def get_block(self, x: int, y: int, z: int) -> Block:
         """Get block at local coordinates"""
@@ -50,18 +53,12 @@ class Chunk:
             self.blocks[pos] = Block(block_type)
         
         # Invalidate visible blocks cache when blocks change
-        self._cache_dirty = True
+        self.mark_dirty()
 
     def get_visible_faces(self, world: Optional['World'] = None) -> Dict[str, np.ndarray]:
         """Get optimized arrays of visible block data for rendering (cached)"""
-        world_version = world.mesh_version if world is not None else -1
-
         # Return cached result if available and valid
-        if (
-            not self._cache_dirty
-            and self._visible_faces_cache is not None
-            and self._cache_world_version == world_version
-        ):
+        if not self._cache_dirty and self._visible_faces_cache is not None:
             return self._visible_faces_cache
 
         # Pre-allocate lists for better performance
@@ -127,7 +124,6 @@ class Chunk:
         # Cache the result
         self._visible_faces_cache = result
         self._cache_dirty = False
-        self._cache_world_version = world_version
         return result
 
     def generate_terrain(self):
@@ -180,7 +176,7 @@ class Chunk:
         # print(f"Generated {blocks_generated} blocks in chunk ({self.x}, {self.z})")
         self.generated = True
         # Mark cache as dirty after terrain generation
-        self._cache_dirty = True
+        self.mark_dirty()
     
     def _get_height_at(self, world_x: int, world_z: int) -> int:
         """Get terrain height at world coordinates"""
@@ -259,7 +255,6 @@ class World:
     def __init__(self, seed: int = None, use_multiprocessing: bool = True):
         self.chunks: Dict[Tuple[int, int], Chunk] = {}
         self.seed = seed or random.randint(0, 1000000)
-        self._mesh_version = 0
         random.seed(self.seed)
         
         if noise:
@@ -271,15 +266,36 @@ class World:
         """Get the chunk size"""
         return Chunk.SIZE
 
-    @property
-    def mesh_version(self) -> int:
-        """Version counter used to invalidate chunk face caches when world topology changes."""
-        return self._mesh_version
+    def _mark_chunk_dirty(self, chunk_x: int, chunk_z: int):
+        """Mark a chunk dirty if it already exists."""
+        chunk = self.get_chunk(chunk_x, chunk_z)
+        if chunk is not None:
+            chunk.mark_dirty()
+
+    def _mark_adjacent_chunks_dirty_for_chunk(self, chunk_x: int, chunk_z: int):
+        """Mark orthogonal neighboring chunks dirty when this chunk is created/loaded."""
+        self._mark_chunk_dirty(chunk_x + 1, chunk_z)
+        self._mark_chunk_dirty(chunk_x - 1, chunk_z)
+        self._mark_chunk_dirty(chunk_x, chunk_z + 1)
+        self._mark_chunk_dirty(chunk_x, chunk_z - 1)
+
+    def _mark_adjacent_chunks_dirty_for_block(self, chunk_x: int, chunk_z: int, local_x: int, local_z: int):
+        """Mark neighboring chunks dirty only when a changed block sits on a chunk border."""
+        if local_x == 0:
+            self._mark_chunk_dirty(chunk_x - 1, chunk_z)
+        elif local_x == Chunk.SIZE - 1:
+            self._mark_chunk_dirty(chunk_x + 1, chunk_z)
+
+        if local_z == 0:
+            self._mark_chunk_dirty(chunk_x, chunk_z - 1)
+        elif local_z == Chunk.SIZE - 1:
+            self._mark_chunk_dirty(chunk_x, chunk_z + 1)
     
     def get_chunk_coords(self, world_x: int, world_z: int) -> Tuple[int, int]:
         """Convert world coordinates to chunk coordinates"""
-        chunk_x = np.round(world_x / Chunk.SIZE).astype(int)
-        chunk_z = np.round(world_z / Chunk.SIZE).astype(int)
+        # Use floor division for stable chunk boundaries and negative coordinates.
+        chunk_x = world_x // Chunk.SIZE
+        chunk_z = world_z // Chunk.SIZE
         return (chunk_x, chunk_z)
     
     def get_local_coords(self, world_x: int, world_y: int, world_z: int) -> Tuple[int, int, int]:
@@ -297,7 +313,8 @@ class World:
             chunk = Chunk(chunk_x, chunk_z)
             chunk.generate_terrain()
             self.chunks[chunk_coords] = chunk
-            self._mesh_version += 1
+            # A new neighboring chunk changes border visibility for existing chunks.
+            self._mark_adjacent_chunks_dirty_for_chunk(chunk_x, chunk_z)
 
         return self.chunks[chunk_coords]
     
@@ -340,7 +357,7 @@ class World:
         
         local_x, local_y, local_z = self.get_local_coords(world_x, world_y, world_z)
         chunk.set_block(local_x, local_y, local_z, block_type)
-        self._mesh_version += 1
+        self._mark_adjacent_chunks_dirty_for_block(chunk_x, chunk_z, local_x, local_z)
 
     def get_visible_chunks(self, center_x: int, center_z: int, render_distance: int = 2, to_create: bool = True) -> List[Chunk]:
         """Get list of chunks that should be visible/loaded, sorted by distance from center"""
