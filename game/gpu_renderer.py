@@ -410,7 +410,7 @@ class GPURenderer:
         # Get visible chunks using optimized culling
         visible_chunks = self._get_optimized_visible_chunks(world, camera, RENDER_DISTANCE)
         # Batch process all blocks using NumPy
-        block_data = self._prepare_block_data(visible_chunks, camera, max_blocks)
+        block_data = self._prepare_block_data(world, visible_chunks, camera, max_blocks)
         if len(block_data['positions']) > 0:
             self._render_blocks_moderngl(block_data, camera)
         # Render UI elements
@@ -455,7 +455,7 @@ class GPURenderer:
         self.last_stats['faces'] = instance_count
         self.last_stats['blocks'] = block_data.get('total_blocks', 0)
     
-    def _prepare_block_data(self, chunks: List[Chunk], camera: Camera, max_blocks: int) -> Dict:
+    def _prepare_block_data(self, world: World, chunks: List[Chunk], camera: Camera, max_blocks: int) -> Dict:
         """Ultra-optimized batch processing for 10k+ blocks using NumPy arrays"""
         if not chunks:
             return {
@@ -477,7 +477,7 @@ class GPURenderer:
                 continue
             
             # Get optimized visible faces data
-            visible_data = chunk.get_visible_faces()
+            visible_data = chunk.get_visible_faces(world)
             
             if len(visible_data['positions']) > 0:
                 all_positions.append(visible_data['positions'])

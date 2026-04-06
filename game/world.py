@@ -32,6 +32,7 @@ class Chunk:
         # Cache for visible faces to improve performance
         self._visible_faces_cache = None
         self._cache_dirty = True
+        self._cache_world_version = -1
     
     def get_block(self, x: int, y: int, z: int) -> Block:
         """Get block at local coordinates"""
@@ -51,10 +52,16 @@ class Chunk:
         # Invalidate visible blocks cache when blocks change
         self._cache_dirty = True
 
-    def get_visible_faces(self) -> Dict[str, np.ndarray]:
+    def get_visible_faces(self, world: Optional['World'] = None) -> Dict[str, np.ndarray]:
         """Get optimized arrays of visible block data for rendering (cached)"""
+        world_version = world.mesh_version if world is not None else -1
+
         # Return cached result if available and valid
-        if not self._cache_dirty and self._visible_faces_cache is not None:
+        if (
+            not self._cache_dirty
+            and self._visible_faces_cache is not None
+            and self._cache_world_version == world_version
+        ):
             return self._visible_faces_cache
 
         # Pre-allocate lists for better performance
@@ -96,8 +103,13 @@ class Chunk:
                     # Get the neighboring block within this chunk
                     neighbor_block = self.get_block(neighbor_x, neighbor_y, neighbor_z)
                 else:
-                    # If neighbor is outside chunk bounds, assume it's air (visible face)
-                    neighbor_block = AIR_BLOCK
+                    if world is not None:
+                        neighbor_world_x = chunk_world_x + neighbor_x
+                        neighbor_world_z = chunk_world_z + neighbor_z
+                        neighbor_block = world.get_block_no_create(neighbor_world_x, neighbor_y, neighbor_world_z)
+                    else:
+                        # If world context is unavailable, treat outside-chunk neighbors as air.
+                        neighbor_block = AIR_BLOCK
                 
                 # Face is visible if neighboring block is not solid
                 if not neighbor_block.is_solid():
@@ -115,6 +127,7 @@ class Chunk:
         # Cache the result
         self._visible_faces_cache = result
         self._cache_dirty = False
+        self._cache_world_version = world_version
         return result
 
     def generate_terrain(self):
@@ -246,6 +259,7 @@ class World:
     def __init__(self, seed: int = None, use_multiprocessing: bool = True):
         self.chunks: Dict[Tuple[int, int], Chunk] = {}
         self.seed = seed or random.randint(0, 1000000)
+        self._mesh_version = 0
         random.seed(self.seed)
         
         if noise:
@@ -256,6 +270,11 @@ class World:
     def chunk_size(self) -> int:
         """Get the chunk size"""
         return Chunk.SIZE
+
+    @property
+    def mesh_version(self) -> int:
+        """Version counter used to invalidate chunk face caches when world topology changes."""
+        return self._mesh_version
     
     def get_chunk_coords(self, world_x: int, world_z: int) -> Tuple[int, int]:
         """Convert world coordinates to chunk coordinates"""
@@ -278,6 +297,7 @@ class World:
             chunk = Chunk(chunk_x, chunk_z)
             chunk.generate_terrain()
             self.chunks[chunk_coords] = chunk
+            self._mesh_version += 1
 
         return self.chunks[chunk_coords]
     
@@ -296,6 +316,19 @@ class World:
         
         local_x, local_y, local_z = self.get_local_coords(world_x, world_y, world_z)
         return chunk.get_block(local_x, local_y, local_z)
+
+    def get_block_no_create(self, world_x: int, world_y: int, world_z: int) -> Block:
+        """Get block at world coordinates without creating missing chunks."""
+        if world_y < 0 or world_y >= 256:
+            return AIR_BLOCK
+
+        chunk_x, chunk_z = self.get_chunk_coords(world_x, world_z)
+        chunk = self.get_chunk(chunk_x, chunk_z)
+        if chunk is None:
+            return AIR_BLOCK
+
+        local_x, local_y, local_z = self.get_local_coords(world_x, world_y, world_z)
+        return chunk.get_block(local_x, local_y, local_z)
     
     def set_block(self, world_x: int, world_y: int, world_z: int, block_type: BlockType):
         """Set block at world coordinates"""
@@ -307,6 +340,7 @@ class World:
         
         local_x, local_y, local_z = self.get_local_coords(world_x, world_y, world_z)
         chunk.set_block(local_x, local_y, local_z, block_type)
+        self._mesh_version += 1
 
     def get_visible_chunks(self, center_x: int, center_z: int, render_distance: int = 2, to_create: bool = True) -> List[Chunk]:
         """Get list of chunks that should be visible/loaded, sorted by distance from center"""
