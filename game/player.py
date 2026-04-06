@@ -23,6 +23,20 @@ class Player:
         self.gravity = GRAVITY  # gravity acceleration
         self.jump_velocity = JUMP_VELOCITY  # initial jump velocity
         self.flying = True  # Start in fly mode for simplicity
+        self.vertical_velocity = 0.0
+        self.horizontal_velocity = np.array([0.0, 0.0])  # XZ velocity for realistic mode
+        self.on_ground = False
+
+        # Realistic movement tuning
+        self.ground_acceleration = 56.0
+        self.air_acceleration = 20.0
+        self.ground_drag = 20.0
+        self.air_drag = 2.0
+
+        # Collision body settings (camera position is eye height)
+        self.body_half_width = 0.3
+        self.body_eye_height = 1.6
+        self.body_head_margin = 0.1
         
         # Selected block type
         self.selected_block = BlockType.GRASS
@@ -71,13 +85,138 @@ class Player:
         
         # Vertical movement (only in fly mode)
         if self.flying:
+            self.horizontal_velocity = np.array([0.0, 0.0])
             if keys[pygame.K_SPACE]:
                 movement += up * move_speed * dt
             if keys[pygame.K_LSHIFT]:
                 movement -= up * move_speed * dt
-        
-        # Apply movement
-        self.camera.move(movement[0], movement[1], movement[2])
+
+            # Apply movement directly in fly mode
+            self.camera.move(movement[0], movement[1], movement[2])
+            return
+
+        # Realistic mode: acceleration-based horizontal motion + gravity + jump
+        position = self.camera.position.copy()
+        horizontal_dir = np.array([movement[0], 0.0, movement[2]])
+        horizontal_norm = np.linalg.norm(horizontal_dir)
+        if horizontal_norm > 0:
+            horizontal_dir = horizontal_dir / horizontal_norm
+
+        horizontal_vel = np.array([
+            self.horizontal_velocity[0],
+            0.0,
+            self.horizontal_velocity[1],
+        ])
+        target_vel = horizontal_dir * self.speed
+
+        accel = self.ground_acceleration if self.on_ground else self.air_acceleration
+        velocity_delta = target_vel - horizontal_vel
+        velocity_delta_y0 = np.array([velocity_delta[0], 0.0, velocity_delta[2]])
+        velocity_delta_mag = np.linalg.norm(velocity_delta_y0)
+        if velocity_delta_mag > 0:
+            speed_change = min(velocity_delta_mag, accel * dt)
+            horizontal_vel += (velocity_delta_y0 / velocity_delta_mag) * speed_change
+
+        if horizontal_norm == 0:
+            drag = self.ground_drag if self.on_ground else self.air_drag
+            horizontal_speed = np.linalg.norm([horizontal_vel[0], horizontal_vel[2]])
+            if horizontal_speed > 0:
+                decel = min(horizontal_speed, drag * dt)
+                horizontal_vel *= max(0.0, (horizontal_speed - decel) / horizontal_speed)
+
+        move_x = horizontal_vel[0] * dt
+        move_z = horizontal_vel[2] * dt
+
+        position, hit_x = self._move_axis_with_collision(position, 0, move_x)
+        position, hit_z = self._move_axis_with_collision(position, 2, move_z)
+        if hit_x:
+            horizontal_vel[0] = 0.0
+        if hit_z:
+            horizontal_vel[2] = 0.0
+
+        self.horizontal_velocity = np.array([horizontal_vel[0], horizontal_vel[2]])
+
+        self.vertical_velocity -= self.gravity * dt
+        vertical_delta = self.vertical_velocity * dt
+        position, hit_vertical = self._move_axis_with_collision(position, 1, vertical_delta)
+        if hit_vertical:
+            self.vertical_velocity = 0.0
+
+        self.camera.set_position(position[0], position[1], position[2])
+
+        # Keep stable ground contact for jump checks
+        ground_probe = position.copy()
+        ground_probe[1] -= 0.06
+        self.on_ground = self._collides_at(ground_probe)
+
+    def _move_axis_with_collision(self, position: np.ndarray, axis: int, delta: float):
+        """Move along a single axis with small steps to prevent tunneling."""
+        if abs(delta) < 1e-8:
+            return position, False
+
+        steps = max(1, int(abs(delta) / 0.05) + 1)
+        step_delta = delta / steps
+
+        current = position.copy()
+        for _ in range(steps):
+            trial = current.copy()
+            trial[axis] += step_delta
+            if self._collides_at(trial):
+                return current, True
+            current = trial
+
+        return current, False
+
+    def _collides_at(self, position: np.ndarray) -> bool:
+        """Check if the player's collision box intersects any solid block."""
+        min_x = position[0] - self.body_half_width
+        max_x = position[0] + self.body_half_width
+        min_y = position[1] - self.body_eye_height
+        max_y = position[1] + self.body_head_margin
+        min_z = position[2] - self.body_half_width
+        max_z = position[2] + self.body_half_width
+
+        x_start = math.floor(min_x) - 1
+        x_end = math.ceil(max_x) + 1
+        y_start = math.floor(min_y) - 1
+        y_end = math.ceil(max_y) + 1
+        z_start = math.floor(min_z) - 1
+        z_end = math.ceil(max_z) + 1
+
+        for bx in range(x_start, x_end + 1):
+            for by in range(y_start, y_end + 1):
+                for bz in range(z_start, z_end + 1):
+                    block = self.world.get_block(bx, by, bz)
+                    if not block.is_solid():
+                        continue
+
+                    block_min_x = bx - 0.5
+                    block_max_x = bx + 0.5
+                    block_min_y = by - 0.5
+                    block_max_y = by + 0.5
+                    block_min_z = bz - 0.5
+                    block_max_z = bz + 0.5
+
+                    overlap_x = max_x > block_min_x and min_x < block_max_x
+                    overlap_y = max_y > block_min_y and min_y < block_max_y
+                    overlap_z = max_z > block_min_z and min_z < block_max_z
+
+                    if overlap_x and overlap_y and overlap_z:
+                        return True
+
+        return False
+
+    def _resolve_initial_overlap(self):
+        """If entering realistic mode inside blocks, nudge player upward until clear."""
+        position = self.camera.position.copy()
+        if not self._collides_at(position):
+            return
+
+        for _ in range(50):
+            position[1] += 0.1
+            if not self._collides_at(position):
+                self.camera.set_position(position[0], position[1], position[2])
+                return
     
     def handle_mouse_motion(self, rel_x: int, rel_y: int):
         """Handle mouse movement for camera rotation"""
@@ -107,6 +246,26 @@ class Player:
         # Toggle mouse lock
         if key == pygame.K_TAB:
             self.toggle_mouse_lock()
+
+        # Toggle realistic/fly movement mode
+        if key == pygame.K_F5:
+            self.flying = not self.flying
+            self.vertical_velocity = 0.0
+            self.horizontal_velocity = np.array([0.0, 0.0])
+            if self.flying:
+                self.on_ground = False
+                print("切換為飛行模式")
+            else:
+                self._resolve_initial_overlap()
+                ground_probe = self.camera.position.copy()
+                ground_probe[1] -= 0.06
+                self.on_ground = self._collides_at(ground_probe)
+                print("切換為真實模式")
+
+        # Jump in realistic mode
+        if key == pygame.K_SPACE and not self.flying and self.on_ground:
+            self.vertical_velocity = self.jump_velocity
+            self.on_ground = False
     
     def toggle_mouse_lock(self):
         """Toggle mouse lock for camera control"""
