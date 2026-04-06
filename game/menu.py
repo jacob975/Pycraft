@@ -147,6 +147,8 @@ class ModernGLMenu:
         # Ensure depth testing is disabled so 2D UI elements render in draw order
         # (the pause menu shares the GPU context with the 3D renderer, which leaves depth testing on)
         self.ctx.disable(mgl.DEPTH_TEST)
+        # Ensure face culling is disabled so UI quads are not discarded when reusing 3D renderer state.
+        self.ctx.disable(mgl.CULL_FACE)
 
         print("✅ ModernGL context initialized for menu")
     
@@ -401,6 +403,12 @@ class ModernGLMenu:
     
     def render(self):
         """Render the menu using ModernGL"""
+        # Re-assert UI-safe GL state each frame in case previous renderer changed it.
+        self.ctx.disable(mgl.DEPTH_TEST)
+        self.ctx.disable(mgl.CULL_FACE)
+        self.ctx.enable(mgl.BLEND)
+        self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
+
         # Clear screen
         self.ctx.clear(self.bg_color[0], self.bg_color[1], self.bg_color[2], 1.0)
         
