@@ -1370,6 +1370,104 @@ def show_pause_menu(width: int = 1024, height: int = 768, screen: pygame.Surface
         print("🚀 Attempting ModernGL GPU-accelerated pause menu...")
         pause_menu = ModernGLPauseMenu(width, height, screen)
         return pause_menu.run()
+    except RuntimeError as e:
+        if "OpenGL" in str(e):
+            print(f"⚠️ OpenGL context error in pause menu: {e}")
+            print("📱 Falling back to simple pause menu")
+        else:
+            raise e
     except ImportError as e:
         print(f"⚠️ ModernGL not available for pause menu: {e}")
         print("📱 Falling back to simple pause menu")
+    except Exception as e:
+        print(f"⚠️ ModernGL pause menu failed: {e}")
+        print("📱 Falling back to simple pause menu")
+
+    # Simple pygame fallback menu
+    screen = pygame.display.set_mode((width, height))
+    pygame.display.set_caption("Pycraft - Pause Menu")
+    pygame.mouse.set_visible(True)
+    pygame.event.set_grab(False)
+
+    clock = pygame.time.Clock()
+    title_font = pygame.font.Font(None, 72)
+    button_font = pygame.font.Font(None, 42)
+    hint_font = pygame.font.Font(None, 28)
+
+    options = [
+        ("resume", "Resume Game"),
+        ("save_quit", "Save & Quit"),
+        ("main_menu", "Exit to Main Menu"),
+    ]
+    selected_index = 0
+
+    button_width = 360
+    button_height = 64
+    button_spacing = 18
+    start_y = height // 2 - 40
+    start_x = width // 2 - button_width // 2
+
+    while True:
+        mouse_pos = pygame.mouse.get_pos()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return "main_menu"
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return "resume"
+                if event.key in (pygame.K_UP, pygame.K_w):
+                    selected_index = (selected_index - 1) % len(options)
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    selected_index = (selected_index + 1) % len(options)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    return options[selected_index][0]
+
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                for i, (option_key, _label) in enumerate(options):
+                    rect = pygame.Rect(
+                        start_x,
+                        start_y + i * (button_height + button_spacing),
+                        button_width,
+                        button_height,
+                    )
+                    if rect.collidepoint(event.pos):
+                        return option_key
+
+        screen.fill((16, 18, 30))
+
+        # Dimmed overlay look for pause state.
+        overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 80))
+        screen.blit(overlay, (0, 0))
+
+        title_surface = title_font.render("PAUSED", True, (245, 245, 255))
+        screen.blit(title_surface, title_surface.get_rect(center=(width // 2, 120)))
+
+        hint_surface = hint_font.render("ESC to resume", True, (185, 185, 200))
+        screen.blit(hint_surface, hint_surface.get_rect(center=(width // 2, height - 70)))
+
+        for i, (_key, label) in enumerate(options):
+            rect = pygame.Rect(
+                start_x,
+                start_y + i * (button_height + button_spacing),
+                button_width,
+                button_height,
+            )
+
+            hovered = rect.collidepoint(mouse_pos)
+            selected = i == selected_index
+            active = hovered or selected
+
+            bg_color = (68, 96, 160) if active else (44, 52, 86)
+            border_color = (245, 245, 255) if active else (140, 150, 180)
+
+            pygame.draw.rect(screen, bg_color, rect, border_radius=10)
+            pygame.draw.rect(screen, border_color, rect, 2, border_radius=10)
+
+            label_surface = button_font.render(label, True, (255, 255, 255))
+            screen.blit(label_surface, label_surface.get_rect(center=rect.center))
+
+        pygame.display.flip()
+        clock.tick(60)

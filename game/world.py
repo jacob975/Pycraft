@@ -16,6 +16,8 @@ except ImportError:
 from .blocks import Block, BlockType
 from config import *
 
+AIR_BLOCK = Block(BlockType.AIR)
+
 class Chunk:
     """A chunk of blocks in the world"""
     
@@ -34,7 +36,7 @@ class Chunk:
     def get_block(self, x: int, y: int, z: int) -> Block:
         """Get block at local coordinates"""
         pos = (x, y, z)
-        return self.blocks.get(pos, Block(BlockType.AIR))
+        return self.blocks.get(pos, AIR_BLOCK)
     
     def set_block(self, x: int, y: int, z: int, block_type: BlockType):
         """Set block at local coordinates"""
@@ -54,25 +56,24 @@ class Chunk:
         # Return cached result if available and valid
         if not self._cache_dirty and self._visible_faces_cache is not None:
             return self._visible_faces_cache
-        st = time.time()
-        
+
         # Pre-allocate lists for better performance
         positions = []
         colors = []
-        block_types = []
+        face_ids = []
         
         chunk_world_x = self.x * self.SIZE
         chunk_world_z = self.z * self.SIZE
         
-        # Pre-compute direction vectors for neighbor checking
-        directions = np.array([
+        # Face order must match renderer face lookup in gpu_renderer.py
+        directions = (
             (0, 0, -1),  # north
-            (0, 0, 1),   # south  
+            (0, 0, 1),   # south
             (1, 0, 0),   # east
             (-1, 0, 0),  # west
             (0, 1, 0),   # up
-            (0, -1, 0)   # down
-        ])
+            (0, -1, 0),  # down
+        )
         
         # Pre-compute block colors to avoid repeated object creation
         color_cache = Block._COLORS
@@ -82,10 +83,10 @@ class Chunk:
             if not block.is_solid():
                 continue
             
-            # Check if any face is visible (not blocked by adjacent solid block)
-            has_visible_face = False
-            
-            for dx, dy, dz in directions:
+            world_pos = (x + chunk_world_x, y, z + chunk_world_z)
+
+            # Add one instance per visible face instead of one per block
+            for face_idx, (dx, dy, dz) in enumerate(directions):
                 neighbor_x, neighbor_y, neighbor_z = x + dx, y + dy, z + dz
                 
                 # Check if neighbor position is within chunk bounds
@@ -96,25 +97,19 @@ class Chunk:
                     neighbor_block = self.get_block(neighbor_x, neighbor_y, neighbor_z)
                 else:
                     # If neighbor is outside chunk bounds, assume it's air (visible face)
-                    neighbor_block = Block(BlockType.AIR)
+                    neighbor_block = AIR_BLOCK
                 
                 # Face is visible if neighboring block is not solid
                 if not neighbor_block.is_solid():
-                    has_visible_face = True
-                    break  # Found at least one visible face, that's enough
-            
-            # Only add block if it has at least one visible face
-            if has_visible_face:
-                world_pos = (x + chunk_world_x, y, z + chunk_world_z)
-                positions.append(world_pos)
-                colors.append(color_cache.get(block.type, Block._DEFAULT_COLOR))
-                block_types.append(block.type)
+                    positions.append(world_pos)
+                    colors.append(color_cache.get(block.type, Block._DEFAULT_COLOR))
+                    face_ids.append(face_idx)
         
         # Convert to optimized NumPy arrays
         result = {
             'positions': np.array(positions, dtype=np.float32) if positions else np.empty((0, 3), dtype=np.float32),
             'colors': np.array(colors, dtype=np.float32) if colors else np.empty((0, 3), dtype=np.float32),
-            'types': np.array(block_types, dtype=object) if block_types else np.empty(0, dtype=object)
+            'face_ids': np.array(face_ids, dtype=np.uint8) if face_ids else np.empty(0, dtype=np.uint8)
         }
         
         # Cache the result
@@ -289,12 +284,12 @@ class World:
     def get_chunk(self, chunk_x: int, chunk_z: int) -> Optional[Chunk]:
         """Get existing chunk without creating it"""
         chunk_coords = (chunk_x, chunk_z)
-        return self.chunks.get(chunk_coords, Chunk(chunk_x, chunk_z))
+        return self.chunks.get(chunk_coords)
     
     def get_block(self, world_x: int, world_y: int, world_z: int) -> Block:
         """Get block at world coordinates"""
         if world_y < 0 or world_y >= 256:  # Height limits
-            return Block(BlockType.AIR)
+            return AIR_BLOCK
         
         chunk_x, chunk_z = self.get_chunk_coords(world_x, world_z)
         chunk = self.get_or_create_chunk(chunk_x, chunk_z)
@@ -315,8 +310,6 @@ class World:
 
     def get_visible_chunks(self, center_x: int, center_z: int, render_distance: int = 2, to_create: bool = True) -> List[Chunk]:
         """Get list of chunks that should be visible/loaded, sorted by distance from center"""
-        visible_chunks = []
-
         center_chunk_x, center_chunk_z = self.get_chunk_coords(center_x, center_z)
 
         # Debug: Print chunk loading info occasionally
@@ -325,8 +318,9 @@ class World:
         else:
             self._debug_chunk_counter = 0
 
-        # Collect chunks with their distances
+        # Collect chunks with their squared distances (avoid sqrt in hot path)
         chunk_distance_pairs = []
+        render_distance_sq = render_distance * render_distance
 
         for dx in range(-render_distance, render_distance + 1):
             for dz in range(-render_distance, render_distance + 1):
@@ -334,13 +328,15 @@ class World:
                 chunk_z = center_chunk_z + dz
 
                 # Only load chunks within circular distance
-                distance = math.sqrt(dx*dx + dz*dz)
-                if distance <= render_distance:
+                distance_sq = dx * dx + dz * dz
+                if distance_sq <= render_distance_sq:
                     if to_create:
                         chunk = self.get_or_create_chunk(chunk_x, chunk_z)
                     else:
                         chunk = self.get_chunk(chunk_x, chunk_z)
-                    chunk_distance_pairs.append((chunk, distance))
+                        if chunk is None:
+                            continue
+                    chunk_distance_pairs.append((chunk, distance_sq))
 
         # Sort by distance (closest first)
         chunk_distance_pairs.sort(key=lambda x: x[1])

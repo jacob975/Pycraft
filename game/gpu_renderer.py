@@ -84,6 +84,14 @@ class GPURenderer:
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.existing_screen = existing_screen
+
+        self.max_blocks = 65536
+        self.max_instances = self.max_blocks * 6
+
+        self._cached_visible_chunks: List[Chunk] = []
+        self._cached_chunk_center: Optional[Tuple[int, int]] = None
+        self._cached_world_chunk_count = -1
+        self._cached_render_distance = -1
         
         # Initialize ModernGL rendering pipeline
         self._init_moderngl_context()
@@ -92,43 +100,19 @@ class GPURenderer:
         self._setup_uniforms()
         self.aspect = screen_width / screen_height
 
-        # Enhanced stats for debug and performance tracking
-        self.last_stats = {
-            'faces': 0,
-            'blocks': 0,
-            'culled_blocks': 0,
-            'render_time_ms': 0.0,
-            'frames_rendered': 0,
-        }
-        
-        # Pre-allocated numpy arrays for batch processing
-        self.max_blocks = 65536
-        self.block_positions = np.zeros((self.max_blocks, 3), dtype=np.float32)
-        self.block_colors = np.zeros((self.max_blocks, 3), dtype=np.float32)
-        self.block_types = np.zeros(self.max_blocks, dtype=np.int32)
-        
-        # Frustum planes for culling
-        self.frustum_planes = np.zeros((6, 4), dtype=np.float32)
-        
-        # Performance flags - always true for ModernGL-only renderer
-        self.use_moderngl = True
-        self.use_numpy_optimization = True
-            
-        print(f"🚀 ModernGL GPU Renderer initialized - Screen: {self.screen_width}x{self.screen_height}")
-
     # ------------------------------------------------------------------
     # Initialization methods
     # ------------------------------------------------------------------
     def _create_shaders(self):
         """Create comprehensive shader programs for different rendering needs"""
-        # Main block rendering shader with instancing
+        # Main face rendering shader with instancing
         vertex_shader = '''
         #version 330 core
         
-        layout(location = 0) in vec3 position;
-        layout(location = 1) in vec3 normal;
-        layout(location = 2) in vec3 instance_pos;
-        layout(location = 3) in vec3 instance_color;
+        layout(location = 0) in vec2 quad_pos;
+        layout(location = 1) in vec3 instance_pos;
+        layout(location = 2) in vec3 instance_color;
+        layout(location = 3) in float instance_face;
         
         uniform mat4 projection_matrix;
         uniform mat4 view_matrix;
@@ -138,8 +122,24 @@ class GPURenderer:
         out vec3 color;
         out float fog_factor;
         
+        void get_face_basis(int face_id, out vec3 normal, out vec3 tangent, out vec3 bitangent) {
+            if (face_id == 0) { normal = vec3(0.0, 0.0, -1.0); tangent = vec3(-1.0, 0.0, 0.0); bitangent = vec3(0.0, 1.0, 0.0); }
+            else if (face_id == 1) { normal = vec3(0.0, 0.0, 1.0); tangent = vec3(1.0, 0.0, 0.0); bitangent = vec3(0.0, 1.0, 0.0); }
+            else if (face_id == 2) { normal = vec3(1.0, 0.0, 0.0); tangent = vec3(0.0, 0.0, -1.0); bitangent = vec3(0.0, 1.0, 0.0); }
+            else if (face_id == 3) { normal = vec3(-1.0, 0.0, 0.0); tangent = vec3(0.0, 0.0, 1.0); bitangent = vec3(0.0, 1.0, 0.0); }
+            else if (face_id == 4) { normal = vec3(0.0, 1.0, 0.0); tangent = vec3(1.0, 0.0, 0.0); bitangent = vec3(0.0, 0.0, -1.0); }
+            else { normal = vec3(0.0, -1.0, 0.0); tangent = vec3(1.0, 0.0, 0.0); bitangent = vec3(0.0, 0.0, 1.0); }
+        }
+
         void main() {
-            vec3 world_pos = position + instance_pos;
+            int face_id = int(instance_face + 0.5);
+            vec3 normal;
+            vec3 tangent;
+            vec3 bitangent;
+            get_face_basis(face_id, normal, tangent, bitangent);
+
+            vec3 center = instance_pos + (normal * 0.5);
+            vec3 world_pos = center + tangent * quad_pos.x + bitangent * quad_pos.y;
             gl_Position = projection_matrix * view_matrix * vec4(world_pos, 1.0);
             
             // Simplified lighting for better performance
@@ -147,9 +147,9 @@ class GPURenderer:
             color = instance_color * brightness;
             
             // Simplified fog calculation
-        float distance = length(world_pos - camera_pos);
-        fog_factor = clamp(1.0 - (distance - 40.0) / 60.0, 0.0, 1.0);
-    }
+            float distance = length(world_pos - camera_pos);
+            fog_factor = clamp(1.0 - (distance - 40.0) / 60.0, 0.0, 1.0);
+        }
         '''
         
         fragment_shader = '''
@@ -210,58 +210,32 @@ class GPURenderer:
     
     def _create_geometry_buffers(self):
         """Create optimized geometry buffers for instanced rendering"""
-        # Create cube vertices with normals (unit cube from -0.5 to 0.5)
-        vertices = np.array([
-            # Front face (z = 0.5)
-            -0.5, -0.5,  0.5,  0.0,  0.0,  1.0,  # bottom-left
-             0.5, -0.5,  0.5,  0.0,  0.0,  1.0,  # bottom-right
-             0.5,  0.5,  0.5,  0.0,  0.0,  1.0,  # top-right
-            -0.5,  0.5,  0.5,  0.0,  0.0,  1.0,  # top-left
-            
-            # Back face (z = -0.5)
-            -0.5, -0.5, -0.5,  0.0,  0.0, -1.0,
-             0.5, -0.5, -0.5,  0.0,  0.0, -1.0,
-             0.5,  0.5, -0.5,  0.0,  0.0, -1.0,
-            -0.5,  0.5, -0.5,  0.0,  0.0, -1.0,
-            
-            # Left face (x = -0.5)
-            -0.5, -0.5, -0.5, -1.0,  0.0,  0.0,
-            -0.5, -0.5,  0.5, -1.0,  0.0,  0.0,
-            -0.5,  0.5,  0.5, -1.0,  0.0,  0.0,
-            -0.5,  0.5, -0.5, -1.0,  0.0,  0.0,
-            
-            # Right face (x = 0.5)
-             0.5, -0.5, -0.5,  1.0,  0.0,  0.0,
-             0.5, -0.5,  0.5,  1.0,  0.0,  0.0,
-             0.5,  0.5,  0.5,  1.0,  0.0,  0.0,
-             0.5,  0.5, -0.5,  1.0,  0.0,  0.0,
-            
-            # Top face (y = 0.5)
-            -0.5,  0.5, -0.5,  0.0,  1.0,  0.0,
-            -0.5,  0.5,  0.5,  0.0,  1.0,  0.0,
-             0.5,  0.5,  0.5,  0.0,  1.0,  0.0,
-             0.5,  0.5, -0.5,  0.0,  1.0,  0.0,
-            
-            # Bottom face (y = -0.5)
-            -0.5, -0.5, -0.5,  0.0, -1.0,  0.0,
-            -0.5, -0.5,  0.5,  0.0, -1.0,  0.0,
-             0.5, -0.5,  0.5,  0.0, -1.0,  0.0,
-             0.5, -0.5, -0.5,  0.0, -1.0,  0.0,
+        # Unit quad centered at origin; orientation is determined in vertex shader by face id
+        quad_vertices = np.array([
+            -0.5, -0.5,
+             0.5, -0.5,
+             0.5,  0.5,
+            -0.5, -0.5,
+             0.5,  0.5,
+            -0.5,  0.5,
         ], dtype=np.float32)
-        
-        # Cube indices for triangulated faces (counter-clockwise winding)
-        indices = np.array([
-            0, 2, 1,  0, 3, 2,    # Front (CCW)
-            4, 6, 5,  4, 7, 6,    # Back (CCW)
-            8, 10, 9,  8, 11, 10,  # Left (CCW)
-            12, 14, 13, 12, 15, 14, # Right (CCW)
-            16, 18, 17, 16, 19, 18, # Top (CCW)
-            20, 22, 21, 20, 23, 22  # Bottom (CCW)
-        ], dtype=np.uint32)
-        
-        # Create buffers
-        self.cube_vbo = self.ctx.buffer(vertices.tobytes())
-        self.cube_ibo = self.ctx.buffer(indices.tobytes())
+
+        self.face_vbo = self.ctx.buffer(quad_vertices.tobytes())
+
+        # Reusable dynamic instance buffer: [pos.xyz, color.rgb, face_id]
+        self.instance_stride_bytes = 7 * 4
+        self.instance_buffer = self.ctx.buffer(
+            reserve=self.max_instances * self.instance_stride_bytes,
+            dynamic=True,
+        )
+
+        self.block_vao = self.ctx.vertex_array(
+            self.block_shader,
+            [
+                (self.face_vbo, '2f', 'quad_pos'),
+                (self.instance_buffer, '3f 3f 1f/i', 'instance_pos', 'instance_color', 'instance_face'),
+            ],
+        )
         
         # Create crosshair geometry
         crosshair_vertices = np.array([
@@ -274,6 +248,11 @@ class GPURenderer:
         ], dtype=np.float32)
         
         self.crosshair_vbo = self.ctx.buffer(crosshair_vertices.tobytes())
+        self.crosshair_vao = self.ctx.vertex_array(
+            self.ui_shader,
+            [(self.crosshair_vbo, '2f 3f', 'position', 'color')]
+        )
+        self._last_crosshair_center: Optional[Tuple[int, int]] = None
         
         print("✅ Geometry buffers created")
     
@@ -292,12 +271,6 @@ class GPURenderer:
             'render_time_ms': 0.0,
             'frames_rendered': 0,
         }
-        
-        # Pre-allocated numpy arrays for batch processing
-        self.max_blocks = 65536
-        self.block_positions = np.zeros((self.max_blocks, 3), dtype=np.float32)
-        self.block_colors = np.zeros((self.max_blocks, 3), dtype=np.float32)
-        self.block_types = np.zeros(self.max_blocks, dtype=np.int32)
         
         # Frustum planes for culling
         self.frustum_planes = np.zeros((6, 4), dtype=np.float32)
@@ -328,10 +301,9 @@ class GPURenderer:
         # Create ModernGL context
         self.ctx = mgl.create_context()
         
-        # Enable depth testing but disable face culling to see all faces
+        # Enable depth testing and back-face culling to reduce overdraw
         self.ctx.enable(mgl.DEPTH_TEST)
-        # Face culling disabled to debug rendering issues
-        # self.ctx.enable(mgl.CULL_FACE)
+        self.ctx.enable(mgl.CULL_FACE)
         
         print("✅ ModernGL context initialized")
     
@@ -432,7 +404,7 @@ class GPURenderer:
         # Configure depth test (ModernGL uses string values)
         self.ctx.depth_func = '<'  # Less than comparison
         
-        # Determine render limits based on performance mode 
+        # Determine render limits based on performance mode
         max_blocks = MAX_BLOCKS if performance_mode else MAX_BLOCKS * 2
         
         # Get visible chunks using optimized culling
@@ -450,7 +422,8 @@ class GPURenderer:
     
     def _render_blocks_moderngl(self, block_data: Dict, camera: Camera):
         """Render blocks using ModernGL instanced rendering"""
-        if len(block_data['positions']) == 0:
+        face_count = len(block_data['positions'])
+        if face_count == 0:
             return
         
         # Prepare matrices
@@ -463,42 +436,39 @@ class GPURenderer:
         self.block_shader['camera_pos'].write(np.array(camera.position, dtype=np.float32).tobytes())
         self.block_shader['fog_color'].write(np.array([0.529, 0.808, 0.922], dtype=np.float32).tobytes())
         
-        # Create instance data buffer (positions + colors)
+        # Update reusable instance buffer: [pos.xyz, color.rgb, face_id]
         instance_data = np.column_stack([
             block_data['positions'],
-            block_data['colors']
-        ]).astype(np.float32)
-        
-        # Create instance buffer
-        instance_buffer = self.ctx.buffer(instance_data.tobytes())
-        
-        # Create vertex array object with shader program
-        vertex_attributes = [
-            (self.cube_vbo, '3f 3f', 'position', 'normal'),
-            (instance_buffer, '3f 3f/i', 'instance_pos', 'instance_color'),
-        ]
-        
-        vao = self.ctx.vertex_array(self.block_shader, vertex_attributes, self.cube_ibo)
-        
-        # Render all instances
-        vao.render(instances=len(block_data['positions']))
-        
-        # Cleanup
-        vao.release()
-        instance_buffer.release()
-        
-        self.last_stats['faces'] = len(block_data['positions']) * 6  # 6 faces per block
-        self.last_stats['blocks'] = len(block_data['positions'])
+            block_data['colors'],
+            block_data['face_ids'].astype(np.float32, copy=False).reshape(-1, 1),
+        ]).astype(np.float32, copy=False)
+
+        instance_count = min(face_count, self.max_instances)
+        if instance_count <= 0:
+            return
+
+        self.instance_buffer.write(instance_data[:instance_count].tobytes(), offset=0)
+
+        # Render one quad per visible face
+        self.block_vao.render(mode=mgl.TRIANGLES, vertices=6, instances=instance_count)
+
+        self.last_stats['faces'] = instance_count
+        self.last_stats['blocks'] = block_data.get('total_blocks', 0)
     
     def _prepare_block_data(self, chunks: List[Chunk], camera: Camera, max_blocks: int) -> Dict:
         """Ultra-optimized batch processing for 10k+ blocks using NumPy arrays"""
         if not chunks:
-            return {'positions': np.array([]), 'colors': np.array([]), 'types': np.array([])}
+            return {
+                'positions': np.empty((0, 3), dtype=np.float32),
+                'colors': np.empty((0, 3), dtype=np.float32),
+                'face_ids': np.empty(0, dtype=np.uint8),
+                'total_blocks': 0,
+            }
         
         # Pre-allocate lists for concatenation
         all_positions = []
         all_colors = []
-        all_types = []
+        all_face_ids = []
         total_blocks = 0
         
         # Batch process chunks with minimal object creation
@@ -512,7 +482,7 @@ class GPURenderer:
             if len(visible_data['positions']) > 0:
                 all_positions.append(visible_data['positions'])
                 all_colors.append(visible_data['colors'])
-                all_types.append(visible_data['types'])
+                all_face_ids.append(visible_data['face_ids'])
             
             total_blocks += len(chunk.blocks)
 
@@ -520,30 +490,47 @@ class GPURenderer:
         if all_positions:
             final_positions = np.concatenate(all_positions, axis=0)[:max_blocks]
             final_colors = np.concatenate(all_colors, axis=0)[:max_blocks]
-            final_types = np.concatenate(all_types, axis=0)[:max_blocks]
+            final_face_ids = np.concatenate(all_face_ids, axis=0)[:max_blocks]
         else:
             final_positions = np.empty((0, 3), dtype=np.float32)
             final_colors = np.empty((0, 3), dtype=np.float32)
-            final_types = np.empty(0, dtype=object)
+            final_face_ids = np.empty(0, dtype=np.uint8)
 
         # Update stats
-        visible_block_count = len(final_positions)
-        self.last_stats['blocks'] = visible_block_count
-        self.last_stats['culled_blocks'] = max(0, total_blocks - visible_block_count)
+        visible_face_count = len(final_positions)
+        self.last_stats['blocks'] = total_blocks
+        self.last_stats['culled_blocks'] = max(0, total_blocks - min(total_blocks, visible_face_count))
 
         return {
             'positions': final_positions,
             'colors': final_colors,
-            'types': final_types
+            'face_ids': final_face_ids,
+            'total_blocks': total_blocks,
         }
 
     def _get_optimized_visible_chunks(self, world: World, camera: Camera, render_distance: int) -> List[Chunk]:
-        # Get chunks with distance-based culling
-        return world.get_visible_chunks(
-            int(camera.position[0]), int(camera.position[2]), 
-            render_distance=render_distance,
-            to_create=False  # Only get already loaded chunks
+        # Recompute only when crossing chunk boundaries or world chunk count changes
+        center_chunk = world.get_chunk_coords(int(camera.position[0]), int(camera.position[2]))
+        world_chunk_count = len(world.chunks)
+        cache_valid = (
+            self._cached_chunk_center == center_chunk
+            and self._cached_world_chunk_count == world_chunk_count
+            and self._cached_render_distance == render_distance
         )
+        if cache_valid:
+            return self._cached_visible_chunks
+
+        visible_chunks = world.get_visible_chunks(
+            int(camera.position[0]),
+            int(camera.position[2]),
+            render_distance=render_distance,
+            to_create=False,
+        )
+        self._cached_visible_chunks = visible_chunks
+        self._cached_chunk_center = center_chunk
+        self._cached_world_chunk_count = world_chunk_count
+        self._cached_render_distance = render_distance
+        return visible_chunks
 
     def _render_ui_moderngl(self, world: World, camera: Camera):
         """Render UI elements using ModernGL"""
@@ -568,31 +555,22 @@ class GPURenderer:
         # Disable depth testing for UI
         self.ctx.disable(mgl.DEPTH_TEST)
         
-        # Center crosshair position
+        # Update geometry only when center changes (e.g. window resize)
         cx, cy = self.screen_width // 2, self.screen_height // 2
-        size = 10
-        
-        # Update crosshair vertices
-        crosshair_vertices = np.array([
-            # Horizontal line
-            cx - size, cy, 1.0, 1.0, 1.0,
-            cx + size, cy, 1.0, 1.0, 1.0,
-            # Vertical line
-            cx, cy - size, 1.0, 1.0, 1.0,
-            cx, cy + size, 1.0, 1.0, 1.0,
-        ], dtype=np.float32)
-        
-        # Update buffer and render
-        self.crosshair_vbo.write(crosshair_vertices.tobytes())
-        
-        crosshair_vao = self.ctx.vertex_array(
-            self.ui_shader, 
-            [(self.crosshair_vbo, '2f 3f', 'position', 'color')]
-        )
-        
-        # Render as lines
-        crosshair_vao.render(mode=mgl.LINES)
-        crosshair_vao.release()
+        center = (cx, cy)
+        if self._last_crosshair_center != center:
+            size = 10
+            crosshair_vertices = np.array([
+                cx - size, cy, 1.0, 1.0, 1.0,
+                cx + size, cy, 1.0, 1.0, 1.0,
+                cx, cy - size, 1.0, 1.0, 1.0,
+                cx, cy + size, 1.0, 1.0, 1.0,
+            ], dtype=np.float32)
+            self.crosshair_vbo.write(crosshair_vertices.tobytes())
+            self._last_crosshair_center = center
+
+        # Render as lines with reusable VAO
+        self.crosshair_vao.render(mode=mgl.LINES)
         
         # Re-enable depth testing
         self.ctx.enable(mgl.DEPTH_TEST)

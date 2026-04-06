@@ -115,15 +115,15 @@ class GameEngine:
         if self.loaded_metadata and self.loaded_metadata.get("renderer"):
             self.renderer_preference = self.loaded_metadata.get("renderer")
         
-        # Don't enable mouse lock by default - let user press Tab to enable
-        # self.player.toggle_mouse_lock()
+        # Enable mouse lock by default so camera look works immediately
+        self.player.toggle_mouse_lock()
         
         # Game state - optimized for performance
         self.fps_target = FPS * 2 if self.use_gpu else FPS  # Higher FPS targets
         self.debug_mode = False
         # Always start with performance mode for better FPS
         self.performance_mode = True  # Always start in performance mode
-        self.startup_time = 0.0  # Track startup time to ignore early ESC
+        self.startup_time = 0.0
 
         if load_state:
             engine_state = load_state.get("engine") or {}
@@ -171,7 +171,7 @@ class GameEngine:
                 self.running = False
             
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE and self.startup_time > 1.0:
+                if event.key == pygame.K_ESCAPE:
                     # Pause the game and show settings menu
                     self.pause = not self.pause
                 elif event.key == pygame.K_F3:
@@ -311,7 +311,7 @@ class GameEngine:
         print("  F3 - 切換調試信息")
         print("  F4 - 切換性能模式")
         print("  ESC - 暫停/返回選單")
-        print("\n注意: 按Tab鍵啟用滑鼠控制!")
+        print("\n注意: 視角控制已啟用，Tab 可切換滑鼠捕獲。")
         
         last_time = time.time()
         
