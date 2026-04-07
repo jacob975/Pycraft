@@ -44,8 +44,7 @@ python main.py
   - `player.py`: Player class and controls
   - `blocks.py`: Block types and definitions
   - `camera.py`: 3D camera system
-  - `renderer.py`: 3D rendering system
-  - `gpu_renderer.py`: GPU-accelerated rendering
+  - `gpu_renderer.py`: GPU-only accelerated rendering
   - `font_manager.py`: Font loading and text rendering
 - `assets/`: Game assets (if any)
 

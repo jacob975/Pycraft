@@ -2,15 +2,14 @@
 OpenGL-based GPU renderer for Pycraft.
 
 This implementation uses PyOpenGL with a legacy immediate-mode pipeline
-for simplicity. It mirrors the public API of the existing CPU `Renderer`
-class so `engine.GameEngine` can seamlessly switch between them.
+for simplicity and keeps a stable renderer API for `engine.GameEngine`.
 
 Key features:
-  * Frustum-limited chunk selection (same as CPU renderer logic)
+    * Frustum-limited chunk selection
   * Per-face visibility (only draw faces exposed to air)
-  * Simple brightness shading per face (same brightness map)
+    * Simple brightness shading per face
   * Crosshair + UI & debug overlay using pygame font surfaces
-  * Graceful fallback: raise ImportError if OpenGL init fails
+    * Clear startup errors if OpenGL/ModernGL initialization fails
 
 Notes:
   This is intentionally simple (no VBO batching yet). For performance

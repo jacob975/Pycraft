@@ -120,8 +120,13 @@ class Chunk:
                         # If world context is unavailable, treat outside-chunk neighbors as air.
                         neighbor_block = AIR_BLOCK
                 
-                # Face is visible if neighboring block is not solid
-                if not neighbor_block.is_solid():
+                # Rendering occlusion rule: leaf blocks should not hide neighboring faces.
+                # Treat LEAF/LEAVES like air for face visibility decisions only.
+                neighbor_is_occluding = (
+                    neighbor_block.is_solid()
+                    and neighbor_block.type not in (BlockType.LEAF, BlockType.LEAVES)
+                )
+                if not neighbor_is_occluding:
                     positions.append(world_pos)
                     colors.append(color_cache.get(block.type, Block._DEFAULT_COLOR))
                     face_ids.append(face_idx)
@@ -395,7 +400,7 @@ class Chunk:
 class World:
     """Game world containing chunks and blocks"""
     
-    def __init__(self, seed: int = None, use_multiprocessing: bool = True):
+    def __init__(self, seed: Optional[int] = None, use_multiprocessing: bool = True):
         self.chunks: Dict[Tuple[int, int], Chunk] = {}
         self.seed = seed or random.randint(0, 1000000)
         random.seed(self.seed)

@@ -1366,7 +1366,7 @@ def _show_simple_load_world_menu(width: int, height: int, screen: pygame.Surface
         clock.tick(60)
 
 
-def show_main_menu(width: int = 1024, height: int = 768, screen: pygame.Surface = None) -> Optional[str]:
+def show_main_menu(width: int = 1024, height: int = 768, screen: Optional[pygame.Surface] = None) -> Optional[str]:
     """Show the main menu and return the selected option with automatic fallback"""
 
     while True:
@@ -1400,7 +1400,7 @@ def show_main_menu(width: int = 1024, height: int = 768, screen: pygame.Surface 
         return result
 
 
-def show_pause_menu(width: int = 1024, height: int = 768, screen: pygame.Surface = None) -> Optional[str]:
+def show_pause_menu(width: int = 1024, height: int = 768, screen: Optional[pygame.Surface] = None) -> Optional[str]:
     """Show the pause menu and return the selected option with automatic fallback"""
     try:
         print("🚀 Attempting ModernGL GPU-accelerated pause menu...")

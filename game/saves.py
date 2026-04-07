@@ -190,7 +190,6 @@ def save_game(engine: "GameEngine", save_name: Optional[str] = None, overwrite: 
 			"created_at": metadata.created_at,
 			"updated_at": metadata.updated_at,
 			"version": VERSION,
-			"renderer": engine.renderer_preference,
 		},
 		"world": _serialize_world(engine.world),
 		"player": _serialize_player(engine.player),

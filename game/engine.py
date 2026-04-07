@@ -3,7 +3,6 @@ Core game engine and main game loop for Pycraft
 """
 
 import pygame
-import sys
 import time
 import numpy as np
 from typing import Any, Callable, Dict, Optional
@@ -21,20 +20,15 @@ logger = logging.getLogger(__name__)
 
 from config import *
 
-# Try to import GPU renderer
+# GPU renderer is required for this project.
 try:
     from .gpu_renderer import GPURenderer
-    GPU_AVAILABLE = True
-    print("GPU渲染器可用 - OpenGL硬體加速已啟用")
 except ImportError as e:
-    GPU_AVAILABLE = False
-    print(f"GPU渲染器不可用: {e}")
-    print("使用CPU渲染器")
+    raise RuntimeError("GPU renderer is required, but it could not be imported.") from e
 
 
 def build_game_bootstrap(
     load_state: Optional[Dict[str, Any]] = None,
-    use_gpu: bool = True,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """Build heavy world/player startup data that is safe to prepare off the main render path."""
@@ -99,22 +93,17 @@ def build_game_bootstrap(
     elif load_state:
         print("載入存檔: 未命名存檔")
 
-    renderer_preference = 'gpu' if use_gpu else 'cpu'
-    if loaded_metadata and loaded_metadata.get("renderer"):
-        renderer_preference = loaded_metadata.get("renderer")
-
     return {
         "world": world,
         "player": player,
         "loaded_metadata": loaded_metadata,
-        "renderer_preference": renderer_preference,
     }
 
 class GameEngine:
     """Main game engine handling the game loop and coordination"""
     
-    def __init__(self, width: int = 1024, height: int = 768, use_gpu: bool = True,
-                 screen: pygame.Surface = None, load_state: Optional[Dict[str, Any]] = None,
+    def __init__(self, width: int = 1024, height: int = 768,
+                 screen: Optional[pygame.Surface] = None, load_state: Optional[Dict[str, Any]] = None,
                  progress_callback: Optional[Callable[[str], None]] = None,
                  bootstrap_data: Optional[Dict[str, Any]] = None):
         # Initialize Pygame if not already done
@@ -127,7 +116,6 @@ class GameEngine:
         self.running = True
         self.pause = False
         self.clock = pygame.time.Clock()
-        self.use_gpu = use_gpu and GPU_AVAILABLE
         
         # Store screen reference for potential reuse
         self.external_screen = screen
@@ -138,7 +126,6 @@ class GameEngine:
         if bootstrap_data is None:
             bootstrap_data = build_game_bootstrap(
                 load_state=load_state,
-                use_gpu=self.use_gpu,
                 progress_callback=self._report_progress,
             )
 
@@ -151,14 +138,12 @@ class GameEngine:
             args=(self._chunk_reload_distance,)
         )
         self._chunk_reload_thread.start()
-
-        self.renderer_preference = bootstrap_data.get("renderer_preference", 'gpu' if self.use_gpu else 'cpu')
         
         # Enable mouse lock by default so camera look works immediately
         self.player.toggle_mouse_lock()
         
         # Game state - optimized for performance
-        self.fps_target = FPS * 2 if self.use_gpu else FPS  # Higher FPS targets
+        self.fps_target = FPS * 2  # Higher FPS target for GPU rendering
         self.debug_mode = False
         # Always start with performance mode for better FPS
         self.performance_mode = True  # Always start in performance mode
@@ -186,12 +171,8 @@ class GameEngine:
         self._message_expire = 0.0
         
         self._report_progress("Configuring renderer")
-        # Choose renderer based on availability and preference
-        if self.use_gpu:
-            self.renderer = GPURenderer(width, height, self.external_screen)
-            print("使用GPU渲染器 - OpenGL硬體加速")
-        else:
-            raise NotImplementedError("CPU渲染器尚未實作")
+        self.renderer = GPURenderer(width, height, self.external_screen)
+        print("使用GPU渲染器 - OpenGL硬體加速")
 
         # Loading UI is no longer needed once initialization completes
         self._progress_callback = None
@@ -391,7 +372,6 @@ class GameEngine:
                 "name": metadata.display_name,
                 "created_at": metadata.created_at,
                 "updated_at": metadata.updated_at,
-                "renderer": self.renderer_preference,
             }
             print(f"存檔完成: {metadata.display_name} ({metadata.identifier})")
             self.running = False

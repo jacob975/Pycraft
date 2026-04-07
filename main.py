@@ -43,14 +43,14 @@ def _load_state_with_feedback(load_identifier: str, loader) -> dict | None:
         return future.result()
 
 
-def _build_bootstrap_with_feedback(load_state: dict | None, loader, title: str, use_gpu: bool = True) -> dict:
+def _build_bootstrap_with_feedback(load_state: dict | None, loader, title: str) -> dict:
     from game.engine import build_game_bootstrap
 
     dots = [".", "..", "..."]
     index = 0
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(build_game_bootstrap, load_state, use_gpu, None)
+        future = executor.submit(build_game_bootstrap, load_state, None)
         while not future.done():
             loader.set_status(f"{title}{dots[index]}")
             index = (index + 1) % len(dots)
@@ -97,7 +97,6 @@ def main():
                 load_state=None,
                 loader=loader,
                 title="Preparing world data",
-                use_gpu=True,
             )
             loader.advance("World data prepared")
 
@@ -105,7 +104,6 @@ def main():
             game = GameEngine(
                 width=SCREEN_WIDTH,
                 height=SCREEN_HEIGHT,
-                use_gpu=True,
                 screen=screen,
                 bootstrap_data=bootstrap_data,
                 progress_callback=report_progress,
@@ -137,7 +135,6 @@ def main():
                 load_state=state,
                 loader=loader,
                 title="Preparing saved world",
-                use_gpu=True,
             )
             loader.advance("Save data prepared")
 
@@ -145,7 +142,6 @@ def main():
             game = GameEngine(
                 width=SCREEN_WIDTH,
                 height=SCREEN_HEIGHT,
-                use_gpu=True,
                 screen=screen,
                 load_state=state,
                 bootstrap_data=bootstrap_data,
