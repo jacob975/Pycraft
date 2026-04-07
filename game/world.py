@@ -125,9 +125,19 @@ class Chunk:
                     positions.append(world_pos)
                     colors.append(color_cache.get(block.type, Block._DEFAULT_COLOR))
                     face_ids.append(face_idx)
-                    if block.type == BlockType.GRASS and face_idx <= 3:
-                        # Texture layer 3 is grass side texture in renderer texture array.
-                        texture_layers.append(3)
+
+                    # Texture layer layout is defined in gpu_renderer._load_block_textures.
+                    if block.type == BlockType.GRASS:
+                        # Side faces use dedicated grass_side texture; top/bottom use grass texture.
+                        texture_layers.append(3 if face_idx <= 3 else 4)
+                    elif block.type == BlockType.DIRT:
+                        texture_layers.append(5)
+                    elif block.type == BlockType.STONE:
+                        texture_layers.append(6)
+                    elif block.type == BlockType.WOOD:
+                        texture_layers.append(7)
+                    elif block.type in (BlockType.LEAF, BlockType.LEAVES):
+                        texture_layers.append(8)
                     else:
                         texture_layers.append(-1)
         
@@ -218,9 +228,10 @@ class Chunk:
                         blocks_generated += 1
                 
                 # Reduce tree generation for better performance
+                spawn_distance = math.sqrt((world_x + x - 8) ** 2 + (world_z + z - 8) ** 2)
                 if (height < 35 and height > 25 and  # Smaller height range
-                    world_z > 10 and  # Further from spawn
-                    random.random() < 0.005):  # 0.5% chance (reduced from 1%)
+                    spawn_distance > 10 and  # Keep trees away from spawn in all directions
+                    chunk_rng.random() < 0.005):  # 0.5% chance (reduced from 1%)
                     surface_block = self.get_block(x, height, z)
                     if surface_block.type == BlockType.GRASS:
                         self._generate_tree(x, height + 1, z)
@@ -287,27 +298,99 @@ class Chunk:
                 return int(29 + 3 * math.sin(world_x * 0.2) * math.cos(world_z * 0.15))
     
     def _generate_tree(self, x: int, y: int, z: int):
-        """Generate a simple tree at the given position"""
-        tree_height = random.randint(4, 7)
+        """Generate a tree with deterministic branches and canopy around wood supports."""
+        world_x = self.x * self.SIZE + x
+        world_z = self.z * self.SIZE + z
+        tree_seed = (
+            ((self._world_seed & 0xFFFFFFFF) << 32)
+            ^ ((world_x & 0xFFFFFFFF) * 73856093)
+            ^ ((y & 0xFFFFFFFF) * 19349663)
+            ^ ((world_z & 0xFFFFFFFF) * 83492791)
+        )
+        tree_rng = random.Random(tree_seed)
+        tree_height = tree_rng.randint(4, 7)
+
+        def _in_local_bounds(bx: int, by: int, bz: int) -> bool:
+            return 0 <= bx < self.SIZE and 0 <= bz < self.SIZE and 0 <= by < 256
+
+        wood_positions: List[Tuple[int, int, int]] = []
         
         # Tree trunk
         for dy in range(tree_height):
-            if y + dy < 256:  # Height limit
-                self.set_block(x, y + dy, z, BlockType.WOOD)
-        
-        # Tree leaves (simple sphere)
-        leaf_y = y + tree_height - 1
-        for dx in range(-2, 3):
-            for dz in range(-2, 3):
-                for dy in range(-1, 3):
-                    if abs(dx) + abs(dz) + abs(dy) <= 3:
-                        leaf_x, leaf_z = x + dx, z + dz
-                        if (0 <= leaf_x < self.SIZE and 0 <= leaf_z < self.SIZE and
-                            leaf_y + dy < 256 and random.random() < 0.7):
-                            # Only place leaves if within chunk bounds
-                            current_block = self.get_block(leaf_x, leaf_y + dy, leaf_z)
-                            if not current_block.is_solid():
-                                self.set_block(leaf_x, leaf_y + dy, leaf_z, BlockType.LEAF)
+            trunk_y = y + dy
+            if _in_local_bounds(x, trunk_y, z):
+                self.set_block(x, trunk_y, z, BlockType.WOOD)
+                wood_positions.append((x, trunk_y, z))
+
+        # Random side branches from upper trunk.
+        branch_min_dy = max(2, tree_height // 2)
+        directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        for dy in range(branch_min_dy, tree_height):
+            if tree_rng.random() >= 0.35:
+                continue
+
+            tree_rng.shuffle(directions)
+            dir_x, dir_z = directions[0]
+            branch_length = tree_rng.randint(1, 2)
+            branch_x, branch_y, branch_z = x, y + dy, z
+
+            for _ in range(branch_length):
+                branch_x += dir_x
+                branch_z += dir_z
+                if tree_rng.random() < 0.45:
+                    branch_y += 1
+
+                if not _in_local_bounds(branch_x, branch_y, branch_z):
+                    break
+
+                current_block = self.get_block(branch_x, branch_y, branch_z)
+                if current_block.is_solid() and current_block.type not in (BlockType.LEAF, BlockType.LEAVES):
+                    break
+
+                self.set_block(branch_x, branch_y, branch_z, BlockType.WOOD)
+                wood_positions.append((branch_x, branch_y, branch_z))
+
+        def _leaf_noise(nx: int, ny: int, nz: int) -> float:
+            n = (
+                (nx * 374761393)
+                ^ (ny * 668265263)
+                ^ (nz * 2147483647)
+                ^ (self._world_seed * 1274126177)
+            )
+            return (n & 0xFFFF) / 65535.0
+
+        # Build canopy around wood supports (upper trunk + branch tips), not in free space.
+        canopy_centers: List[Tuple[int, int, int, int]] = []
+        top_y = y + tree_height - 1
+        for wx, wy, wz in wood_positions:
+            if wy < y + 2:
+                continue
+            radius = 2 if wy >= top_y - 1 else 1
+            canopy_centers.append((wx, wy, wz, radius))
+
+        for center_x, center_y, center_z, radius in canopy_centers:
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    for dz in range(-radius, radius + 1):
+                        leaf_x = center_x + dx
+                        leaf_y = center_y + dy
+                        leaf_z = center_z + dz
+
+                        if not _in_local_bounds(leaf_x, leaf_y, leaf_z):
+                            continue
+
+                        if abs(dx) + abs(dy) + abs(dz) > radius + 1:
+                            continue
+
+                        noise = _leaf_noise(leaf_x, leaf_y, leaf_z)
+                        chance = 0.86 - 0.16 * (abs(dx) + abs(dz)) - 0.08 * abs(dy)
+                        chance = max(0.3, min(0.9, chance + (noise - 0.5) * 0.25))
+                        if noise > chance:
+                            continue
+
+                        current_block = self.get_block(leaf_x, leaf_y, leaf_z)
+                        if not current_block.is_solid():
+                            self.set_block(leaf_x, leaf_y, leaf_z, BlockType.LEAF)
 
 class World:
     """Game world containing chunks and blocks"""

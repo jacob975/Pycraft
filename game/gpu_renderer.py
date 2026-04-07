@@ -591,13 +591,18 @@ class GPURenderer:
         }
 
     def _load_block_textures(self):
-        """Load tall grass variants and grass side texture into one texture array."""
+        """Load block textures into one texture array used by instanced face rendering."""
         texture_dir = Path(__file__).resolve().parent.parent / 'assets' / 'textures' / 'blocks'
         texture_paths = [
             texture_dir / 'tall_grass_1.png',
             texture_dir / 'tall_grass_2.png',
             texture_dir / 'tall_grass_3.png',
             texture_dir / 'grass_side.png',
+            texture_dir / 'grass.png',
+            texture_dir / 'dirt.png',
+            texture_dir / 'stone.png',
+            texture_dir / 'wood.png',
+            texture_dir / 'leaf.png',
         ]
 
         layers = []
@@ -615,7 +620,8 @@ class GPURenderer:
             layers.append(pygame.image.tostring(image, 'RGBA'))
 
         texture_array_data = b''.join(layers)
-        self.block_texture_array = self.ctx.texture_array((16, 16, 4), 4, texture_array_data)
+        layer_count = len(layers)
+        self.block_texture_array = self.ctx.texture_array((16, 16, layer_count), 4, texture_array_data)
         self.block_texture_array.filter = (mgl.NEAREST, mgl.NEAREST)
         self.block_texture_array.repeat_x = False
         self.block_texture_array.repeat_y = False
