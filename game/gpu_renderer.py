@@ -92,6 +92,7 @@ class GPURenderer:
         self._cached_chunk_center: Optional[Tuple[int, int]] = None
         self._cached_world_chunk_count = -1
         self._cached_render_distance = -1
+        self.render_distance_chunks = int(RENDER_DISTANCE)
 
         # Cache debug text textures to avoid rebuilding GPU resources every frame.
         self._text_texture_cache: Dict[Tuple[str, int, Tuple[int, int, int]], Tuple[mgl.Texture, int, int, float]] = {}
@@ -552,9 +553,21 @@ class GPURenderer:
         # Configure depth test (ModernGL uses string values)
         self.ctx.depth_func = '<'  # Less than comparison
         
-        # Determine render limits based on performance mode
-        max_blocks = MAX_BLOCKS if performance_mode else MAX_BLOCKS * 2
-        render_distance = PERFORMANCE_RENDER_DISTANCE if performance_mode else RENDER_DISTANCE
+        # Use user-selected render distance directly so pause-menu slider maps 1:1.
+        render_distance = self.render_distance_chunks
+
+        # Scale face budget with render distance area so larger distances can
+        # actually display farther chunks instead of being clipped by a fixed cap.
+        if performance_mode:
+            base_distance = max(1, PERFORMANCE_RENDER_DISTANCE)
+            base_budget = MAX_BLOCKS
+        else:
+            base_distance = max(1, RENDER_DISTANCE)
+            base_budget = MAX_BLOCKS * 2
+
+        area_scale = (render_distance / float(base_distance)) ** 2
+        max_blocks = int(base_budget * area_scale)
+        max_blocks = max(base_budget, min(max_blocks, self.max_instances))
         
         # Get visible chunks using optimized culling
         visible_chunks = self._get_optimized_visible_chunks(world, camera, render_distance)
@@ -571,6 +584,14 @@ class GPURenderer:
         render_time = (time.time() - start_time) * 1000
         self.last_stats['render_time_ms'] = render_time
         self.last_stats['frames_rendered'] += 1
+
+    def set_render_distance(self, render_distance: int) -> None:
+        """Set active render distance in chunks for world chunk visibility culling."""
+        clamped_distance = max(MIN_RENDER_DISTANCE, min(MAX_RENDER_DISTANCE, int(render_distance)))
+        if clamped_distance == self.render_distance_chunks:
+            return
+        self.render_distance_chunks = clamped_distance
+        self._cached_render_distance = -1
     
     def _render_blocks_moderngl(self, block_data: Dict, camera: Camera):
         """Render blocks using ModernGL instanced rendering"""

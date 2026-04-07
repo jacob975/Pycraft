@@ -152,6 +152,7 @@ class GameEngine:
         self.third_person_distance = 4.0
         self.third_person_height = 1.4
         self.startup_time = 0.0
+        self.render_distance_chunks = int(RENDER_DISTANCE)
 
         if load_state:
             engine_state = load_state.get("engine") or {}
@@ -160,6 +161,12 @@ class GameEngine:
             if "fps_target" in engine_state:
                 try:
                     self.fps_target = int(engine_state["fps_target"])
+                except (TypeError, ValueError):
+                    pass
+            if "render_distance" in engine_state:
+                try:
+                    parsed_distance = int(engine_state["render_distance"])
+                    self.render_distance_chunks = max(MIN_RENDER_DISTANCE, min(MAX_RENDER_DISTANCE, parsed_distance))
                 except (TypeError, ValueError):
                     pass
         
@@ -172,6 +179,7 @@ class GameEngine:
         
         self._report_progress("Configuring renderer")
         self.renderer = GPURenderer(width, height, self.external_screen)
+        self.renderer.set_render_distance(self.render_distance_chunks)
         print("使用GPU渲染器 - OpenGL硬體加速")
 
         # Loading UI is no longer needed once initialization completes
@@ -334,6 +342,7 @@ class GameEngine:
             'chunks_loaded': chunks_loaded,
             'selected_block': block_name,
             'performance_mode': self.performance_mode,
+            'render_distance': self.render_distance_chunks,
         }
         
         self.renderer.draw_debug_info(debug_data)
@@ -352,7 +361,22 @@ class GameEngine:
         if self.player.mouse_locked:
             mouse_lock_state = True
             self.player.toggle_mouse_lock()
-        selected_option = show_pause_menu(width=self.width, height=self.height, screen=self.renderer.screen)
+        menu_result = show_pause_menu(
+            width=self.width,
+            height=self.height,
+            screen=self.renderer.screen,
+            current_render_distance=self.render_distance_chunks,
+            min_render_distance=MIN_RENDER_DISTANCE,
+            max_render_distance=MAX_RENDER_DISTANCE,
+        )
+        selected_option = None
+        if isinstance(menu_result, dict):
+            selected_option = menu_result.get('action')
+            requested_render_distance = menu_result.get('render_distance')
+            if isinstance(requested_render_distance, int):
+                self.set_render_distance(requested_render_distance)
+        else:
+            selected_option = menu_result
         # Restore mouse lock state
         if mouse_lock_state:
             self.player.toggle_mouse_lock()
@@ -380,6 +404,15 @@ class GameEngine:
             print("退出遊戲...")
             self.running = False
             self.pause = False  # Ensure we exit the pause state
+
+    def set_render_distance(self, render_distance: int) -> None:
+        """Set the user-selected render distance and apply it to the renderer."""
+        clamped_distance = max(MIN_RENDER_DISTANCE, min(MAX_RENDER_DISTANCE, int(render_distance)))
+        if clamped_distance == self.render_distance_chunks:
+            return
+        self.render_distance_chunks = clamped_distance
+        self.renderer.set_render_distance(clamped_distance)
+        self.show_message(f"Render distance: {clamped_distance}")
     
     def run(self):
         """Main game loop"""

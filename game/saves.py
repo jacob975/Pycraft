@@ -197,6 +197,7 @@ def save_game(engine: "GameEngine", save_name: Optional[str] = None, overwrite: 
 			"debug_mode": bool(engine.debug_mode),
 			"performance_mode": bool(engine.performance_mode),
 			"fps_target": getattr(engine, "fps_target", 60),
+			"render_distance": int(getattr(engine, "render_distance_chunks", 8)),
 		},
 	}
 
@@ -242,6 +243,8 @@ def apply_loaded_state(engine: "GameEngine", state: Dict[str, Any]) -> None:
 		engine.performance_mode = bool(engine_state["performance_mode"])
 	if "fps_target" in engine_state:
 		engine.fps_target = int(engine_state["fps_target"])
+	if "render_distance" in engine_state and hasattr(engine, "set_render_distance"):
+		engine.set_render_distance(int(engine_state["render_distance"]))
 
 	metadata = state.get("metadata") or {}
 	engine.loaded_metadata = metadata

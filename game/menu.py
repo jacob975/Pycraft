@@ -955,6 +955,173 @@ class ModernGLPauseMenu(ModernGLMenu):
         subtitle_texture.release()
 
 
+class ModernGLPauseSettingsMenu(ModernGLMenu):
+    """ModernGL settings panel for pause menu options."""
+
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        current_render_distance: int,
+        min_render_distance: int,
+        max_render_distance: int,
+        screen: pygame.Surface = None,
+    ):
+        self.slider_value = int(current_render_distance)
+        self.min_render_distance = int(min_render_distance)
+        self.max_render_distance = int(max_render_distance)
+        self.dragging = False
+        self.slider_rect: Optional[pygame.Rect] = None
+        self.back_rect: Optional[pygame.Rect] = None
+        super().__init__(width, height, screen)
+        self.slider_value = max(self.min_render_distance, min(self.max_render_distance, self.slider_value))
+
+    def _create_buttons(self):
+        self.buttons = {}
+
+    def _value_to_x(self, value: int) -> int:
+        if self.slider_rect is None:
+            return 0
+        if self.max_render_distance == self.min_render_distance:
+            return self.slider_rect.x
+        ratio = (value - self.min_render_distance) / float(self.max_render_distance - self.min_render_distance)
+        return int(self.slider_rect.x + ratio * self.slider_rect.width)
+
+    def _x_to_value(self, x: int) -> int:
+        if self.slider_rect is None:
+            return self.slider_value
+        clamped_x = max(self.slider_rect.x, min(self.slider_rect.right, x))
+        if self.slider_rect.width <= 0:
+            return self.min_render_distance
+        ratio = (clamped_x - self.slider_rect.x) / float(self.slider_rect.width)
+        value = self.min_render_distance + ratio * (self.max_render_distance - self.min_render_distance)
+        return int(round(value))
+
+    def handle_events(self):
+        panel_rect = pygame.Rect(self.width // 2 - 320, self.height // 2 - 170, 640, 320)
+        self.slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 140, panel_rect.width - 140, 12)
+        self.back_rect = pygame.Rect(panel_rect.centerx - 90, panel_rect.bottom - 80, 180, 46)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.running = False
+                elif event.key in (pygame.K_LEFT, pygame.K_a):
+                    self.slider_value = max(self.min_render_distance, self.slider_value - 1)
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    self.slider_value = min(self.max_render_distance, self.slider_value + 1)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                knob_x = self._value_to_x(self.slider_value)
+                knob_rect = pygame.Rect(knob_x - 14, self.slider_rect.centery - 14, 28, 28)
+
+                if self.back_rect.collidepoint(event.pos):
+                    self.running = False
+                elif knob_rect.collidepoint(event.pos) or self.slider_rect.inflate(0, 24).collidepoint(event.pos):
+                    self.dragging = True
+                    self.slider_value = self._x_to_value(event.pos[0])
+            elif event.type == pygame.MOUSEMOTION and self.dragging:
+                self.slider_value = self._x_to_value(event.pos[0])
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self.dragging = False
+
+    def _render_background(self):
+        return
+
+    def _render_title(self):
+        return
+
+    def _render_subtitle(self):
+        return
+
+    def render(self):
+        self.ctx.disable(mgl.DEPTH_TEST)
+        self.ctx.disable(mgl.CULL_FACE)
+        self.ctx.enable(mgl.BLEND)
+        self.ctx.blend_func = mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA
+
+        self.ctx.clear(self.bg_color[0], self.bg_color[1], self.bg_color[2], 1.0)
+        self.ctx.viewport = (0, 0, self.width, self.height)
+
+        panel_rect = pygame.Rect(self.width // 2 - 320, self.height // 2 - 170, 640, 320)
+        self.slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 140, panel_rect.width - 140, 12)
+        self.back_rect = pygame.Rect(panel_rect.centerx - 90, panel_rect.bottom - 80, 180, 46)
+
+        # Dark pause overlay
+        self._render_rect(0, 0, self.width, self.height, np.array([0.0, 0.0, 0.0], dtype=np.float32))
+        self.rect_shader['alpha'].write(np.array([0.45], dtype=np.float32).tobytes())
+        overlay_vertices = np.array([
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0,
+            1.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0, 0.0,
+        ], dtype=np.float32)
+        self.dynamic_rect_vbo.write(overlay_vertices.tobytes())
+        self.rect_shader['ortho_matrix'].write(self.ortho_matrix.T.tobytes())
+        self.rect_shader['offset'].write(np.array([0, 0], dtype=np.float32).tobytes())
+        self.rect_shader['scale'].write(np.array([self.width, self.height], dtype=np.float32).tobytes())
+        self.dynamic_rect_vao.render()
+
+        self._render_rect(panel_rect.x, panel_rect.y, panel_rect.width, panel_rect.height, np.array([0.125, 0.157, 0.266], dtype=np.float32))
+        self._render_rect(panel_rect.x, panel_rect.y, panel_rect.width, 2, np.array([0.6, 0.66, 0.82], dtype=np.float32))
+        self._render_rect(panel_rect.x, panel_rect.bottom - 2, panel_rect.width, 2, np.array([0.6, 0.66, 0.82], dtype=np.float32))
+
+        title_data = self._get_or_create_text_texture("SETTINGS", 64, (245, 245, 255), bold=True)
+        if title_data is not None:
+            texture, tw, th = title_data
+            self._render_texture(texture, self.width // 2 - tw // 2, panel_rect.y + 16, tw, th, np.array([1.0, 1.0, 1.0], dtype=np.float32))
+
+        label_text = f"Render Distance: {self.slider_value} chunks"
+        label_data = self._get_or_create_text_texture(label_text, 38, (235, 240, 255), bold=False)
+        if label_data is not None:
+            texture, lw, lh = label_data
+            self._render_texture(texture, self.width // 2 - lw // 2, panel_rect.y + 90, lw, lh, np.array([1.0, 1.0, 1.0], dtype=np.float32))
+
+        self._render_rect(self.slider_rect.x, self.slider_rect.y, self.slider_rect.width, self.slider_rect.height, np.array([0.31, 0.35, 0.47], dtype=np.float32))
+        knob_x = self._value_to_x(self.slider_value)
+        filled_width = max(1, knob_x - self.slider_rect.x)
+        self._render_rect(self.slider_rect.x, self.slider_rect.y, filled_width, self.slider_rect.height, np.array([0.38, 0.58, 0.93], dtype=np.float32))
+        self._render_rect(knob_x - 10, self.slider_rect.centery - 10, 20, 20, np.array([0.93, 0.95, 1.0], dtype=np.float32))
+
+        hint_text = f"Left/Right or drag slider ({self.min_render_distance}-{self.max_render_distance})"
+        hint_data = self._get_or_create_text_texture(hint_text, 22, (188, 194, 220), bold=False)
+        if hint_data is not None:
+            texture, hw, hh = hint_data
+            self._render_texture(texture, self.width // 2 - hw // 2, panel_rect.y + 188, hw, hh, np.array([1.0, 1.0, 1.0], dtype=np.float32))
+
+        mouse_pos = pygame.mouse.get_pos()
+        back_hovered = self.back_rect.collidepoint(mouse_pos)
+        back_bg = np.array([0.32, 0.42, 0.64], dtype=np.float32) if back_hovered else np.array([0.24, 0.30, 0.47], dtype=np.float32)
+        self._render_rect(self.back_rect.x, self.back_rect.y, self.back_rect.width, self.back_rect.height, back_bg)
+        back_data = self._get_or_create_text_texture("Back", 34, (255, 255, 255), bold=False)
+        if back_data is not None:
+            texture, bw, bh = back_data
+            self._render_texture(
+                texture,
+                self.back_rect.centerx - bw // 2,
+                self.back_rect.centery - bh // 2,
+                bw,
+                bh,
+                np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            )
+
+        pygame.display.flip()
+
+    def run(self) -> int:
+        last_time = time.time()
+        while self.running:
+            current_time = time.time()
+            dt = current_time - last_time
+            last_time = current_time
+            self.handle_events()
+            self.update(dt)
+            self.render()
+            self.clock.tick(60)
+        self._cleanup()
+        return self.slider_value
+
+
 class ModernGLLoadMenu(ModernGLMenu):
     """ModernGL-powered load world selector."""
 
@@ -1400,26 +1567,8 @@ def show_main_menu(width: int = 1024, height: int = 768, screen: Optional[pygame
         return result
 
 
-def show_pause_menu(width: int = 1024, height: int = 768, screen: Optional[pygame.Surface] = None) -> Optional[str]:
-    """Show the pause menu and return the selected option with automatic fallback"""
-    try:
-        print("🚀 Attempting ModernGL GPU-accelerated pause menu...")
-        pause_menu = ModernGLPauseMenu(width, height, screen)
-        return pause_menu.run()
-    except RuntimeError as e:
-        if "OpenGL" in str(e):
-            print(f"⚠️ OpenGL context error in pause menu: {e}")
-            print("📱 Falling back to simple pause menu")
-        else:
-            raise e
-    except ImportError as e:
-        print(f"⚠️ ModernGL not available for pause menu: {e}")
-        print("📱 Falling back to simple pause menu")
-    except Exception as e:
-        print(f"⚠️ ModernGL pause menu failed: {e}")
-        print("📱 Falling back to simple pause menu")
-
-    # Simple pygame fallback menu
+def _run_simple_pause_menu(width: int, height: int) -> Optional[str]:
+    """Fallback pygame pause menu when ModernGL path is unavailable."""
     screen = pygame.display.set_mode((width, height))
     pygame.display.set_caption("Pycraft - Pause Menu")
     pygame.mouse.set_visible(True)
@@ -1432,6 +1581,7 @@ def show_pause_menu(width: int = 1024, height: int = 768, screen: Optional[pygam
 
     options = [
         ("resume", "Resume Game"),
+        ("settings", "Settings"),
         ("save_quit", "Save & Quit"),
         ("main_menu", "Exit to Main Menu"),
     ]
@@ -1440,7 +1590,7 @@ def show_pause_menu(width: int = 1024, height: int = 768, screen: Optional[pygam
     button_width = 360
     button_height = 64
     button_spacing = 18
-    start_y = height // 2 - 40
+    start_y = height // 2 - 80
     start_x = width // 2 - button_width // 2
 
     while True:
@@ -1507,3 +1657,189 @@ def show_pause_menu(width: int = 1024, height: int = 768, screen: Optional[pygam
 
         pygame.display.flip()
         clock.tick(60)
+
+
+def _show_pause_settings_menu(
+    width: int,
+    height: int,
+    current_render_distance: int,
+    min_render_distance: int,
+    max_render_distance: int,
+) -> int:
+    """Fallback pygame settings page with a render-distance slider."""
+    screen = pygame.display.set_mode((width, height))
+    pygame.display.set_caption("Pycraft - Settings")
+    pygame.mouse.set_visible(True)
+    pygame.event.set_grab(False)
+
+    clock = pygame.time.Clock()
+    title_font = pygame.font.Font(None, 72)
+    label_font = pygame.font.Font(None, 44)
+    hint_font = pygame.font.Font(None, 28)
+    button_font = pygame.font.Font(None, 36)
+
+    slider_value = max(min_render_distance, min(max_render_distance, int(current_render_distance)))
+
+    panel_rect = pygame.Rect(width // 2 - 320, height // 2 - 170, 640, 320)
+    slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 140, panel_rect.width - 140, 12)
+    knob_radius = 14
+    dragging = False
+
+    back_rect = pygame.Rect(panel_rect.centerx - 90, panel_rect.bottom - 80, 180, 46)
+
+    def _value_to_x(value: int) -> int:
+        if max_render_distance == min_render_distance:
+            return slider_rect.x
+        ratio = (value - min_render_distance) / float(max_render_distance - min_render_distance)
+        return int(slider_rect.x + ratio * slider_rect.width)
+
+    def _x_to_value(x: int) -> int:
+        clamped_x = max(slider_rect.x, min(slider_rect.right, x))
+        if slider_rect.width <= 0:
+            return min_render_distance
+        ratio = (clamped_x - slider_rect.x) / float(slider_rect.width)
+        value = min_render_distance + ratio * (max_render_distance - min_render_distance)
+        return int(round(value))
+
+    while True:
+        mouse_pos = pygame.mouse.get_pos()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return slider_value
+
+            if event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                    return slider_value
+                if event.key in (pygame.K_LEFT, pygame.K_a):
+                    slider_value = max(min_render_distance, slider_value - 1)
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    slider_value = min(max_render_distance, slider_value + 1)
+
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                knob_x = _value_to_x(slider_value)
+                knob_rect = pygame.Rect(knob_x - knob_radius, slider_rect.centery - knob_radius, knob_radius * 2, knob_radius * 2)
+
+                if back_rect.collidepoint(event.pos):
+                    return slider_value
+
+                if knob_rect.collidepoint(event.pos) or slider_rect.inflate(0, 24).collidepoint(event.pos):
+                    dragging = True
+                    slider_value = _x_to_value(event.pos[0])
+
+            if event.type == pygame.MOUSEMOTION and dragging:
+                slider_value = _x_to_value(event.pos[0])
+
+            if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                dragging = False
+
+        screen.fill((14, 17, 30))
+
+        overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 110))
+        screen.blit(overlay, (0, 0))
+
+        pygame.draw.rect(screen, (32, 40, 68), panel_rect, border_radius=16)
+        pygame.draw.rect(screen, (155, 170, 210), panel_rect, 2, border_radius=16)
+
+        title_surface = title_font.render("SETTINGS", True, (245, 245, 255))
+        screen.blit(title_surface, title_surface.get_rect(center=(width // 2, panel_rect.y + 46)))
+
+        label_text = f"Render Distance: {slider_value} chunks"
+        label_surface = label_font.render(label_text, True, (235, 240, 255))
+        screen.blit(label_surface, label_surface.get_rect(center=(width // 2, panel_rect.y + 110)))
+
+        pygame.draw.rect(screen, (78, 88, 120), slider_rect, border_radius=6)
+        knob_x = _value_to_x(slider_value)
+        filled_rect = pygame.Rect(slider_rect.x, slider_rect.y, max(1, knob_x - slider_rect.x), slider_rect.height)
+        pygame.draw.rect(screen, (96, 148, 238), filled_rect, border_radius=6)
+        pygame.draw.circle(screen, (236, 243, 255), (knob_x, slider_rect.centery), knob_radius)
+        pygame.draw.circle(screen, (94, 120, 186), (knob_x, slider_rect.centery), knob_radius, 2)
+
+        hint_text = f"Left/Right or drag slider ({min_render_distance}-{max_render_distance})"
+        hint_surface = hint_font.render(hint_text, True, (188, 194, 220))
+        screen.blit(hint_surface, hint_surface.get_rect(center=(width // 2, panel_rect.y + 195)))
+
+        back_hovered = back_rect.collidepoint(mouse_pos)
+        back_bg = (82, 106, 162) if back_hovered else (60, 76, 120)
+        back_border = (235, 240, 255) if back_hovered else (145, 158, 196)
+        pygame.draw.rect(screen, back_bg, back_rect, border_radius=10)
+        pygame.draw.rect(screen, back_border, back_rect, 2, border_radius=10)
+        back_surface = button_font.render("Back", True, (255, 255, 255))
+        screen.blit(back_surface, back_surface.get_rect(center=back_rect.center))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+def show_pause_menu(
+    width: int = 1024,
+    height: int = 768,
+    screen: Optional[pygame.Surface] = None,
+    current_render_distance: int = RENDER_DISTANCE,
+    min_render_distance: int = MIN_RENDER_DISTANCE,
+    max_render_distance: int = MAX_RENDER_DISTANCE,
+) -> Optional[Dict[str, object]]:
+    """Show the pause menu and return action + settings values."""
+    render_distance = max(min_render_distance, min(max_render_distance, int(current_render_distance)))
+
+    while True:
+        menu_result: Optional[str]
+        try:
+            print("🚀 Attempting ModernGL GPU-accelerated pause menu...")
+            pause_menu = ModernGLPauseMenu(width, height, screen)
+            menu_result = pause_menu.run()
+        except RuntimeError as e:
+            if "OpenGL" in str(e):
+                print(f"⚠️ OpenGL context error in pause menu: {e}")
+                print("📱 Falling back to simple pause menu")
+            else:
+                raise e
+            menu_result = _run_simple_pause_menu(width, height)
+        except ImportError as e:
+            print(f"⚠️ ModernGL not available for pause menu: {e}")
+            print("📱 Falling back to simple pause menu")
+            menu_result = _run_simple_pause_menu(width, height)
+        except Exception as e:
+            print(f"⚠️ ModernGL pause menu failed: {e}")
+            print("📱 Falling back to simple pause menu")
+            menu_result = _run_simple_pause_menu(width, height)
+
+        if menu_result == 'settings':
+            current_surface = pygame.display.get_surface()
+            is_opengl_surface = bool(current_surface and (current_surface.get_flags() & pygame.OPENGL))
+            if is_opengl_surface:
+                try:
+                    settings_menu = ModernGLPauseSettingsMenu(
+                        width,
+                        height,
+                        current_render_distance=render_distance,
+                        min_render_distance=min_render_distance,
+                        max_render_distance=max_render_distance,
+                        screen=current_surface,
+                    )
+                    render_distance = settings_menu.run()
+                except Exception as settings_error:
+                    print(f"⚠️ ModernGL settings menu failed: {settings_error}")
+                    print("📱 Falling back to simple settings menu")
+                    render_distance = _show_pause_settings_menu(
+                        width,
+                        height,
+                        current_render_distance=render_distance,
+                        min_render_distance=min_render_distance,
+                        max_render_distance=max_render_distance,
+                    )
+            else:
+                render_distance = _show_pause_settings_menu(
+                    width,
+                    height,
+                    current_render_distance=render_distance,
+                    min_render_distance=min_render_distance,
+                    max_render_distance=max_render_distance,
+                )
+            continue
+
+        return {
+            'action': menu_result,
+            'render_distance': render_distance,
+        }
