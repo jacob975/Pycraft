@@ -20,7 +20,7 @@ Notes:
 from __future__ import annotations
 
 import time
-from typing import Dict, Tuple, List, Optional
+from typing import Any, Dict, Tuple, List, Optional
 from pathlib import Path
 import numpy as np
 
@@ -81,7 +81,7 @@ def check_occlusion_batch(positions: np.ndarray, neighbor_data: np.ndarray) -> n
 class GPURenderer:
     """Modern GPU renderer using ModernGL for all rendering operations."""
 
-    def __init__(self, screen_width: int, screen_height: int, existing_screen: pygame.Surface = None):
+    def __init__(self, screen_width: int, screen_height: int, existing_screen: Optional[pygame.Surface] = None):
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.existing_screen = existing_screen
@@ -101,6 +101,15 @@ class GPURenderer:
         self._debug_text_lines: List[Tuple[str, Tuple[int, int, int]]] = []
         self._last_text_cache_prune = 0.0
         self._text_cache_ttl_seconds = 3.0
+        self._character_part_specs: Dict[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = {
+            'head': ((0.0, 1.55, 0.0), (0.50, 0.50, 0.50)),
+            'torso': ((0.0, 1.00, 0.0), (0.70, 0.60, 0.35)),
+            'left_arm': ((-0.48, 1.00, 0.0), (0.20, 0.62, 0.20)),
+            'right_arm': ((0.48, 1.00, 0.0), (0.20, 0.62, 0.20)),
+            'left_leg': ((-0.18, 0.35, 0.0), (0.24, 0.70, 0.24)),
+            'right_leg': ((0.18, 0.35, 0.0), (0.24, 0.70, 0.24)),
+        }
+        self.character_textures: Dict[str, mgl.Texture] = {}
         
         # Initialize ModernGL rendering pipeline
         self._init_moderngl_context()
@@ -268,8 +277,70 @@ class GPURenderer:
             vertex_shader=ui_vertex_shader,
             fragment_shader=ui_fragment_shader
         )
+
+        character_vertex_shader = '''
+        #version 330 core
+
+        layout(location = 0) in vec3 in_position;
+        layout(location = 1) in vec3 in_normal;
+        layout(location = 2) in vec2 in_uv;
+
+        uniform mat4 projection_matrix;
+        uniform mat4 view_matrix;
+        uniform mat4 model_matrix;
+        uniform vec3 light_dir;
+        uniform vec3 camera_pos;
+
+        out vec2 uv;
+        out float lighting;
+        out float fog_factor;
+
+        void main() {
+            vec4 world_pos4 = model_matrix * vec4(in_position, 1.0);
+            vec3 world_pos = world_pos4.xyz;
+            mat3 normal_matrix = mat3(transpose(inverse(model_matrix)));
+            vec3 world_normal = normalize(normal_matrix * in_normal);
+
+            gl_Position = projection_matrix * view_matrix * world_pos4;
+            uv = in_uv;
+
+            lighting = max(0.6, abs(dot(world_normal, normalize(-light_dir))));
+            float distance = length(world_pos - camera_pos);
+            fog_factor = clamp(1.0 - (distance - 40.0) / 60.0, 0.0, 1.0);
+        }
+        '''
+
+        character_fragment_shader = '''
+        #version 330 core
+
+        in vec2 uv;
+        in float lighting;
+        in float fog_factor;
+
+        uniform sampler2D part_texture;
+        uniform vec3 fog_color;
+
+        out vec4 fragColor;
+
+        void main() {
+            vec4 sampled = texture(part_texture, uv);
+            if (sampled.a < 0.1) {
+                discard;
+            }
+
+            vec3 lit_color = sampled.rgb * lighting;
+            vec3 final_color = mix(fog_color, lit_color, fog_factor);
+            fragColor = vec4(final_color, sampled.a);
+        }
+        '''
+
+        self.character_shader = self.ctx.program(
+            vertex_shader=character_vertex_shader,
+            fragment_shader=character_fragment_shader
+        )
         
         print("✅ Shaders created successfully")
+        self._load_character_textures()
     
     def _create_geometry_buffers(self):
         """Create optimized geometry buffers for instanced rendering"""
@@ -316,6 +387,13 @@ class GPURenderer:
             [(self.crosshair_vbo, '2f 3f', 'position', 'color')]
         )
         self._last_crosshair_center: Optional[Tuple[int, int]] = None
+
+        character_vertices = self._create_character_cube_geometry()
+        self.character_vbo = self.ctx.buffer(character_vertices.tobytes())
+        self.character_vao = self.ctx.vertex_array(
+            self.character_shader,
+            [(self.character_vbo, '3f 3f 2f', 'in_position', 'in_normal', 'in_uv')]
+        )
         
         print("✅ Geometry buffers created")
     
@@ -455,7 +533,7 @@ class GPURenderer:
     # ------------------------------------------------------------------
     # ModernGL Rendering Pipeline
     # ------------------------------------------------------------------
-    def render_world(self, world: World, camera: Camera, performance_mode=True):
+    def render_world(self, world: World, camera: Camera, performance_mode=True, player_state: Optional[Dict[str, Any]] = None):
         """High-performance world rendering with ModernGL"""
         start_time = time.time()
         
@@ -485,6 +563,9 @@ class GPURenderer:
         block_data = self._prepare_block_data(world, visible_chunks, camera, max_blocks)
         if len(block_data['positions']) > 0:
             self._render_blocks_moderngl(block_data, camera)
+
+        self._render_player_model(player_state, camera)
+
         # Render UI elements
         self._render_ui_moderngl(world, camera)
         # Update performance stats
@@ -625,6 +706,209 @@ class GPURenderer:
         self.block_texture_array.filter = (mgl.NEAREST, mgl.NEAREST)
         self.block_texture_array.repeat_x = False
         self.block_texture_array.repeat_y = False
+
+    def _load_character_textures(self):
+        """Load the per-body-part textures used by the player model renderer."""
+        texture_dir = Path(__file__).resolve().parent.parent / 'assets' / 'textures' / 'characters' / 'main_character_parts'
+        texture_names = ['head', 'torso', 'left_arm', 'right_arm', 'left_leg', 'right_leg']
+
+        for name in texture_names:
+            path = texture_dir / f'{name}.png'
+            if path.exists():
+                image = pygame.image.load(path.as_posix()).convert_alpha()
+            else:
+                image = pygame.Surface((16, 16), pygame.SRCALPHA, 32)
+                image.fill((255, 255, 255, 255))
+
+            image = pygame.transform.flip(image, False, True)
+            data = pygame.image.tostring(image, 'RGBA')
+            texture = self.ctx.texture(image.get_size(), 4, data)
+            texture.filter = (mgl.NEAREST, mgl.NEAREST)
+            texture.repeat_x = False
+            texture.repeat_y = False
+            self.character_textures[name] = texture
+
+    def _create_character_cube_geometry(self) -> np.ndarray:
+        """Create a unit cube mesh with position/normal/UV for textured body parts."""
+        # Each vertex: position.xyz, normal.xyz, uv.xy
+        vertices = np.array([
+            # Front (+Z)
+            -0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 0.0,
+             0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 0.0,
+             0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 1.0,
+            -0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 0.0,
+             0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 1.0,
+            -0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 1.0,
+
+            # Back (-Z)
+             0.5, -0.5, -0.5,  0.0, 0.0, -1.0,  0.0, 0.0,
+            -0.5, -0.5, -0.5,  0.0, 0.0, -1.0,  1.0, 0.0,
+            -0.5,  0.5, -0.5,  0.0, 0.0, -1.0,  1.0, 1.0,
+             0.5, -0.5, -0.5,  0.0, 0.0, -1.0,  0.0, 0.0,
+            -0.5,  0.5, -0.5,  0.0, 0.0, -1.0,  1.0, 1.0,
+             0.5,  0.5, -0.5,  0.0, 0.0, -1.0,  0.0, 1.0,
+
+            # Left (-X)
+            -0.5, -0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 0.0,
+            -0.5, -0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 0.0,
+            -0.5,  0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 1.0,
+            -0.5, -0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 0.0,
+            -0.5,  0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 1.0,
+            -0.5,  0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 1.0,
+
+            # Right (+X)
+             0.5, -0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 0.0,
+             0.5, -0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 0.0,
+             0.5,  0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 1.0,
+             0.5, -0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 0.0,
+             0.5,  0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 1.0,
+             0.5,  0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 1.0,
+
+            # Top (+Y)
+            -0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  0.0, 0.0,
+             0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  1.0, 0.0,
+             0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  1.0, 1.0,
+            -0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  0.0, 0.0,
+             0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  1.0, 1.0,
+            -0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  0.0, 1.0,
+
+            # Bottom (-Y)
+            -0.5, -0.5, -0.5,  0.0, -1.0, 0.0,  0.0, 0.0,
+             0.5, -0.5, -0.5,  0.0, -1.0, 0.0,  1.0, 0.0,
+             0.5, -0.5,  0.5,  0.0, -1.0, 0.0,  1.0, 1.0,
+            -0.5, -0.5, -0.5,  0.0, -1.0, 0.0,  0.0, 0.0,
+             0.5, -0.5,  0.5,  0.0, -1.0, 0.0,  1.0, 1.0,
+            -0.5, -0.5,  0.5,  0.0, -1.0, 0.0,  0.0, 1.0,
+        ], dtype=np.float32)
+        return vertices
+
+    def _translation_matrix(self, tx: float, ty: float, tz: float) -> np.ndarray:
+        matrix = np.eye(4, dtype=np.float32)
+        matrix[0, 3] = tx
+        matrix[1, 3] = ty
+        matrix[2, 3] = tz
+        return matrix
+
+    def _scale_matrix(self, sx: float, sy: float, sz: float) -> np.ndarray:
+        matrix = np.eye(4, dtype=np.float32)
+        matrix[0, 0] = sx
+        matrix[1, 1] = sy
+        matrix[2, 2] = sz
+        return matrix
+
+    def _rotation_y_matrix(self, yaw: float) -> np.ndarray:
+        c = float(np.cos(yaw))
+        s = float(np.sin(yaw))
+        return np.array([
+            [ c, 0.0, s, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [-s, 0.0, c, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ], dtype=np.float32)
+
+    def _rotation_x_matrix(self, angle: float) -> np.ndarray:
+        c = float(np.cos(angle))
+        s = float(np.sin(angle))
+        return np.array([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, c, -s, 0.0],
+            [0.0, s, c, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ], dtype=np.float32)
+
+    def _render_player_model(self, player_state: Optional[Dict[str, Any]], camera: Camera) -> None:
+        """Render the main character model when third-person mode is active."""
+        if not player_state or not player_state.get('visible', False):
+            return
+
+        if not self.character_textures:
+            return
+
+        pos = player_state.get('position')
+        if pos is None or len(pos) != 3:
+            return
+
+        base_x = float(pos[0])
+        base_y = float(pos[1]) - 1.6
+        base_z = float(pos[2])
+        yaw = float(player_state.get('yaw', 0.0))
+        walking = bool(player_state.get('walking', False))
+        move_factor = float(player_state.get('move_factor', 0.0))
+
+        swing = 0.0
+        if walking and move_factor > 0.01:
+            swing = np.sin(time.time() * 8.0) * (0.7 * move_factor)
+
+        # Swap arm textures only when the camera is behind the character so
+        # front view keeps left/right correct while back view appears mirrored.
+        facing = np.array([np.sin(yaw), 0.0, np.cos(yaw)], dtype=np.float32)
+        character_center = np.array([base_x, base_y + 1.0, base_z], dtype=np.float32)
+        to_camera = np.array(camera.position, dtype=np.float32) - character_center
+        to_camera[1] = 0.0
+        is_back_view = bool(np.dot(to_camera, facing) < 0.0)
+
+        view_matrix = self._create_view_matrix(camera)
+        self.character_shader['projection_matrix'].write(self.projection_matrix.T.astype(np.float32).tobytes())
+        self.character_shader['view_matrix'].write(view_matrix.T.astype(np.float32).tobytes())
+        self.character_shader['light_dir'].write(np.array([0.2, -1.0, 0.3], dtype=np.float32).tobytes())
+        self.character_shader['camera_pos'].write(np.array(camera.position, dtype=np.float32).tobytes())
+        self.character_shader['fog_color'].write(np.array([0.529, 0.808, 0.922], dtype=np.float32).tobytes())
+
+        base_matrix = self._translation_matrix(base_x, base_y, base_z) @ self._rotation_y_matrix(yaw)
+
+        for part_name, (center, size) in self._character_part_specs.items():
+            texture_part_name = part_name
+            if is_back_view and part_name == 'left_arm':
+                texture_part_name = 'right_arm'
+            elif is_back_view and part_name == 'right_arm':
+                texture_part_name = 'left_arm'
+
+            texture = self.character_textures.get(texture_part_name)
+            if texture is None:
+                continue
+
+            if part_name == 'left_arm':
+                pivot_y = size[1] * 0.5
+                part_matrix = (
+                    base_matrix
+                    @ self._translation_matrix(center[0], center[1] + pivot_y, center[2])
+                    @ self._rotation_x_matrix(-swing)
+                    @ self._translation_matrix(0.0, -pivot_y, 0.0)
+                    @ self._scale_matrix(size[0], size[1], size[2])
+                )
+            elif part_name == 'right_arm':
+                pivot_y = size[1] * 0.5
+                part_matrix = (
+                    base_matrix
+                    @ self._translation_matrix(center[0], center[1] + pivot_y, center[2])
+                    @ self._rotation_x_matrix(swing)
+                    @ self._translation_matrix(0.0, -pivot_y, 0.0)
+                    @ self._scale_matrix(size[0], size[1], size[2])
+                )
+            elif part_name == 'left_leg':
+                pivot_y = size[1] * 0.5
+                part_matrix = (
+                    base_matrix
+                    @ self._translation_matrix(center[0], center[1] + pivot_y, center[2])
+                    @ self._rotation_x_matrix(swing)
+                    @ self._translation_matrix(0.0, -pivot_y, 0.0)
+                    @ self._scale_matrix(size[0], size[1], size[2])
+                )
+            elif part_name == 'right_leg':
+                pivot_y = size[1] * 0.5
+                part_matrix = (
+                    base_matrix
+                    @ self._translation_matrix(center[0], center[1] + pivot_y, center[2])
+                    @ self._rotation_x_matrix(-swing)
+                    @ self._translation_matrix(0.0, -pivot_y, 0.0)
+                    @ self._scale_matrix(size[0], size[1], size[2])
+                )
+            else:
+                part_matrix = base_matrix @ self._translation_matrix(center[0], center[1], center[2]) @ self._scale_matrix(size[0], size[1], size[2])
+            self.character_shader['model_matrix'].write(part_matrix.T.astype(np.float32).tobytes())
+            texture.use(location=0)
+            self.character_shader['part_texture'].value = 0
+            self.character_vao.render(mode=mgl.TRIANGLES)
 
     def _get_optimized_visible_chunks(self, world: World, camera: Camera, render_distance: int) -> List[Chunk]:
         # Recompute only when crossing chunk boundaries or world chunk count changes

@@ -1,0 +1,47 @@
+newmtl head
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.000 0.000 0.000
+d 1.0
+illum 1
+map_Kd ../textures/characters/main_character_parts/head.png
+
+newmtl torso
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.000 0.000 0.000
+d 1.0
+illum 1
+map_Kd ../textures/characters/main_character_parts/torso.png
+
+newmtl left_arm
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.000 0.000 0.000
+d 1.0
+illum 1
+map_Kd ../textures/characters/main_character_parts/left_arm.png
+
+newmtl right_arm
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.000 0.000 0.000
+d 1.0
+illum 1
+map_Kd ../textures/characters/main_character_parts/right_arm.png
+
+newmtl left_leg
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.000 0.000 0.000
+d 1.0
+illum 1
+map_Kd ../textures/characters/main_character_parts/left_leg.png
+
+newmtl right_leg
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.000 0.000 0.000
+d 1.0
+illum 1
+map_Kd ../textures/characters/main_character_parts/right_leg.png

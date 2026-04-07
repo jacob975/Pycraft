@@ -5,11 +5,13 @@ Core game engine and main game loop for Pycraft
 import pygame
 import sys
 import time
+import numpy as np
 from typing import Any, Callable, Dict, Optional
 import threading
 import logging
 from .world import World
 from .player import Player
+from .camera import Camera
 from .blocks import BlockType
 from .menu import show_pause_menu
 from .saves import apply_player_state, apply_world_state, save_game
@@ -160,6 +162,10 @@ class GameEngine:
         self.debug_mode = False
         # Always start with performance mode for better FPS
         self.performance_mode = True  # Always start in performance mode
+        self.third_person_mode = False
+        self.selfie_mode = False
+        self.third_person_distance = 4.0
+        self.third_person_height = 1.4
         self.startup_time = 0.0
 
         if load_state:
@@ -219,8 +225,19 @@ class GameEngine:
                     mode = 'ON' if self.performance_mode else 'OFF'
                     print(f"Performance mode: {mode}")
                     self.show_message(f"Performance {mode}")
+                elif event.key == pygame.K_F6:
+                    self.third_person_mode = not self.third_person_mode
+                    view_mode = 'Third-person' if self.third_person_mode else 'First-person'
+                    print(f"視角模式: {view_mode}")
+                    self.show_message(view_mode)
+                elif event.key == pygame.K_r:
+                    self.selfie_mode = True
                 else:
                     self.player.handle_key_press(event.key)
+
+            elif event.type == pygame.KEYUP:
+                if event.key == pygame.K_r:
+                    self.selfie_mode = False
             
             elif event.type == pygame.MOUSEMOTION:
                 self.player.handle_mouse_motion(event.rel[0], event.rel[1])
@@ -235,7 +252,13 @@ class GameEngine:
     
     def render(self):
         """Render the current frame"""
-        self.renderer.render_world(self.world, self.player.camera, performance_mode=self.performance_mode)
+        render_camera = self._get_render_camera()
+        self.renderer.render_world(
+            self.world,
+            render_camera,
+            performance_mode=self.performance_mode,
+            player_state=self._get_player_render_state(),
+        )
         
         if self.debug_mode:
             self.draw_debug_info()
@@ -247,6 +270,50 @@ class GameEngine:
         
         # Update frame count for performance tracking
         self.frame_count += 1
+
+    def _get_player_render_state(self) -> Dict[str, Any]:
+        """Provide player transform data for optional model rendering."""
+        horizontal_speed = float(np.linalg.norm(self.player.horizontal_velocity))
+        move_factor = 0.0
+        if self.player.speed > 1e-6:
+            move_factor = min(1.0, horizontal_speed / float(self.player.speed))
+
+        return {
+            "position": self.player.camera.position.copy(),
+            "yaw": float(self.player.camera.yaw),
+            "visible": bool(self.third_person_mode or self.selfie_mode),
+            "walking": bool((not self.player.flying) and self.player.on_ground and horizontal_speed > 0.05),
+            "move_factor": float(move_factor),
+        }
+
+    def _get_render_camera(self) -> Camera:
+        """Return the camera used for world rendering (first- or third-person)."""
+        if self.selfie_mode:
+            forward = self.player.camera.get_horizontal_forward_vector()
+            render_pos = (
+                self.player.camera.position
+                + forward * self.third_person_distance
+                + np.array([0.0, self.third_person_height, 0.0], dtype=float)
+            )
+            render_camera = Camera(tuple(render_pos.tolist()))
+            render_camera.yaw = self.player.camera.yaw + np.pi
+            render_camera.pitch = -0.2
+            return render_camera
+
+        if not self.third_person_mode:
+            return self.player.camera
+
+        forward = self.player.camera.get_horizontal_forward_vector()
+        render_pos = (
+            self.player.camera.position
+            - forward * self.third_person_distance
+            + np.array([0.0, self.third_person_height, 0.0], dtype=float)
+        )
+
+        render_camera = Camera(tuple(render_pos.tolist()))
+        render_camera.yaw = self.player.camera.yaw
+        render_camera.pitch = self.player.camera.pitch
+        return render_camera
 
     def _preload_chunks_around_player(self, reload_distance: int = 2) -> None:
         """Ensure the player's current and surrounding chunks stay loaded."""
