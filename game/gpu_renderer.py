@@ -93,6 +93,7 @@ class GPURenderer:
         self._cached_world_chunk_count = -1
         self._cached_render_distance = -1
         self.render_distance_chunks = int(RENDER_DISTANCE)
+        self.fog_distance = float(FOG_DISTANCE)
 
         # Cache debug text textures to avoid rebuilding GPU resources every frame.
         self._text_texture_cache: Dict[Tuple[str, int, Tuple[int, int, int]], Tuple[mgl.Texture, int, int, float]] = {}
@@ -138,6 +139,8 @@ class GPURenderer:
         uniform vec3 light_dir;
         uniform vec3 camera_pos;
         uniform float grass_width;
+        uniform float fog_start;
+        uniform float fog_range;
         
         out vec3 color;
         out float fog_factor;
@@ -205,7 +208,7 @@ class GPURenderer:
             
             // Simplified fog calculation
             float distance = length(world_pos - camera_pos);
-            fog_factor = clamp(1.0 - (distance - 40.0) / 60.0, 0.0, 1.0);
+            fog_factor = clamp(1.0 - (distance - fog_start) / max(fog_range, 1.0), 0.0, 1.0);
             texture_layer = instance_texture_layer;
         }
         '''
@@ -290,6 +293,8 @@ class GPURenderer:
         uniform mat4 model_matrix;
         uniform vec3 light_dir;
         uniform vec3 camera_pos;
+        uniform float fog_start;
+        uniform float fog_range;
 
         out vec2 uv;
         out float lighting;
@@ -306,7 +311,7 @@ class GPURenderer:
 
             lighting = max(0.6, abs(dot(world_normal, normalize(-light_dir))));
             float distance = length(world_pos - camera_pos);
-            fog_factor = clamp(1.0 - (distance - 40.0) / 60.0, 0.0, 1.0);
+            fog_factor = clamp(1.0 - (distance - fog_start) / max(fog_range, 1.0), 0.0, 1.0);
         }
         '''
 
@@ -556,6 +561,9 @@ class GPURenderer:
         # Use user-selected render distance directly so pause-menu slider maps 1:1.
         render_distance = self.render_distance_chunks
 
+        view_matrix = self._create_view_matrix(camera)
+        self.frustum_planes = self._calculate_frustum_planes(view_matrix, self.projection_matrix)
+
         # Scale face budget with render distance area so larger distances can
         # actually display farther chunks instead of being clipped by a fixed cap.
         if performance_mode:
@@ -592,6 +600,18 @@ class GPURenderer:
             return
         self.render_distance_chunks = clamped_distance
         self._cached_render_distance = -1
+
+    def set_fog_distance(self, fog_distance: float) -> None:
+        """Set the distance where fog fully blends into the sky color."""
+        clamped_distance = max(float(MIN_FOG_DISTANCE), min(float(MAX_FOG_DISTANCE), float(fog_distance)))
+        self.fog_distance = clamped_distance
+
+    def _get_fog_parameters(self) -> Tuple[float, float]:
+        """Return fog start/range so fog reaches full intensity near fog_distance."""
+        fog_end = max(float(MIN_FOG_DISTANCE), float(self.fog_distance))
+        fog_start = fog_end * 0.4
+        fog_range = max(1.0, fog_end - fog_start)
+        return fog_start, fog_range
     
     def _render_blocks_moderngl(self, block_data: Dict, camera: Camera):
         """Render blocks using ModernGL instanced rendering"""
@@ -608,6 +628,9 @@ class GPURenderer:
         self.block_shader['light_dir'].write(np.array([0.2, -1.0, 0.3], dtype=np.float32).tobytes())
         self.block_shader['camera_pos'].write(np.array(camera.position, dtype=np.float32).tobytes())
         self.block_shader['fog_color'].write(np.array([0.529, 0.808, 0.922], dtype=np.float32).tobytes())
+        fog_start, fog_range = self._get_fog_parameters()
+        self.block_shader['fog_start'].value = fog_start
+        self.block_shader['fog_range'].value = fog_range
         self.block_shader['grass_width'].value = TALL_GRASS_WIDTH
         self.block_texture_array.use(location=0)
         self.block_shader['block_textures'].value = 0
@@ -668,10 +691,16 @@ class GPURenderer:
 
         # Efficiently concatenate all arrays
         if all_positions:
-            final_positions = np.concatenate(all_positions, axis=0)[:max_blocks]
-            final_colors = np.concatenate(all_colors, axis=0)[:max_blocks]
-            final_face_ids = np.concatenate(all_face_ids, axis=0)[:max_blocks]
-            final_texture_layers = np.concatenate(all_texture_layers, axis=0)[:max_blocks]
+            final_positions = np.concatenate(all_positions, axis=0)
+            final_colors = np.concatenate(all_colors, axis=0)
+            final_face_ids = np.concatenate(all_face_ids, axis=0)
+            final_texture_layers = np.concatenate(all_texture_layers, axis=0)
+
+            selected_indices = self._prioritize_face_indices(final_positions, camera, max_blocks)
+            final_positions = final_positions[selected_indices]
+            final_colors = final_colors[selected_indices]
+            final_face_ids = final_face_ids[selected_indices]
+            final_texture_layers = final_texture_layers[selected_indices]
         else:
             final_positions = np.empty((0, 3), dtype=np.float32)
             final_colors = np.empty((0, 3), dtype=np.float32)
@@ -690,6 +719,34 @@ class GPURenderer:
             'texture_layers': final_texture_layers,
             'total_blocks': total_blocks,
         }
+
+    def _prioritize_face_indices(self, positions: np.ndarray, camera: Camera, max_faces: int) -> np.ndarray:
+        """Select visible face indices by priority: frustum > forward hemisphere > distance."""
+        face_count = len(positions)
+        if face_count <= max_faces:
+            return np.arange(face_count, dtype=np.int64)
+
+        camera_pos = np.array(camera.position, dtype=np.float32)
+        to_faces = positions - camera_pos
+        distance_sq = np.sum(to_faces * to_faces, axis=1)
+
+        forward = np.array(camera.get_forward_vector(), dtype=np.float32)
+        forward_norm = np.linalg.norm(forward)
+        if forward_norm > 1e-6:
+            forward /= forward_norm
+        forward_dot = np.dot(to_faces, forward)
+        in_front = forward_dot > 0.0
+
+        # Prefer faces inside the camera frustum first, then forward-facing ones.
+        in_frustum = frustum_cull_blocks(positions, self.frustum_planes)
+        group_priority = np.where(in_frustum, 0.0, np.where(in_front, 1.0, 2.0))
+
+        # Large group weight guarantees view-priority, distance breaks ties inside each group.
+        score = group_priority * 1_000_000_000.0 + distance_sq
+
+        selected = np.argpartition(score, max_faces - 1)[:max_faces]
+        selected_sorted = selected[np.argsort(score[selected])]
+        return selected_sorted.astype(np.int64, copy=False)
 
     def _load_block_textures(self):
         """Load block textures into one texture array used by instanced face rendering."""
@@ -873,6 +930,9 @@ class GPURenderer:
         self.character_shader['light_dir'].write(np.array([0.2, -1.0, 0.3], dtype=np.float32).tobytes())
         self.character_shader['camera_pos'].write(np.array(camera.position, dtype=np.float32).tobytes())
         self.character_shader['fog_color'].write(np.array([0.529, 0.808, 0.922], dtype=np.float32).tobytes())
+        fog_start, fog_range = self._get_fog_parameters()
+        self.character_shader['fog_start'].value = fog_start
+        self.character_shader['fog_range'].value = fog_range
 
         base_matrix = self._translation_matrix(base_x, base_y, base_z) @ self._rotation_y_matrix(yaw)
 

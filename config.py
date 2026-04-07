@@ -29,6 +29,9 @@ MOUSE_SENSITIVITY = 0.003  # Mouse look sensitivity
 FOV = 70.0  # Field of view in degrees
 NEAR_PLANE = 0.1  # Near clipping plane
 FAR_PLANE = 100.0  # Far clipping plane
+FOG_DISTANCE = 100.0  # Distance in blocks where fog fully blends to sky color
+MIN_FOG_DISTANCE = 40.0  # Lowest user-selectable fog distance
+MAX_FOG_DISTANCE = 240.0  # Highest user-selectable fog distance
 
 # Blocks
 class BlockType(Enum):

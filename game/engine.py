@@ -153,6 +153,7 @@ class GameEngine:
         self.third_person_height = 1.4
         self.startup_time = 0.0
         self.render_distance_chunks = int(RENDER_DISTANCE)
+        self.fog_distance = float(FOG_DISTANCE)
 
         if load_state:
             engine_state = load_state.get("engine") or {}
@@ -169,6 +170,12 @@ class GameEngine:
                     self.render_distance_chunks = max(MIN_RENDER_DISTANCE, min(MAX_RENDER_DISTANCE, parsed_distance))
                 except (TypeError, ValueError):
                     pass
+            if "fog_distance" in engine_state:
+                try:
+                    parsed_fog_distance = float(engine_state["fog_distance"])
+                    self.fog_distance = max(float(MIN_FOG_DISTANCE), min(float(MAX_FOG_DISTANCE), parsed_fog_distance))
+                except (TypeError, ValueError):
+                    pass
         
         # Performance tracking
         self.frame_count = 0
@@ -180,6 +187,7 @@ class GameEngine:
         self._report_progress("Configuring renderer")
         self.renderer = GPURenderer(width, height, self.external_screen)
         self.renderer.set_render_distance(self.render_distance_chunks)
+        self.renderer.set_fog_distance(self.fog_distance)
         print("使用GPU渲染器 - OpenGL硬體加速")
 
         # Loading UI is no longer needed once initialization completes
@@ -366,15 +374,21 @@ class GameEngine:
             height=self.height,
             screen=self.renderer.screen,
             current_render_distance=self.render_distance_chunks,
+            current_fog_distance=self.fog_distance,
             min_render_distance=MIN_RENDER_DISTANCE,
             max_render_distance=MAX_RENDER_DISTANCE,
+            min_fog_distance=MIN_FOG_DISTANCE,
+            max_fog_distance=MAX_FOG_DISTANCE,
         )
         selected_option = None
         if isinstance(menu_result, dict):
             selected_option = menu_result.get('action')
             requested_render_distance = menu_result.get('render_distance')
-            if isinstance(requested_render_distance, int):
-                self.set_render_distance(requested_render_distance)
+            if isinstance(requested_render_distance, (int, float)):
+                self.set_render_distance(int(requested_render_distance))
+            requested_fog_distance = menu_result.get('fog_distance')
+            if isinstance(requested_fog_distance, (int, float)):
+                self.set_fog_distance(float(requested_fog_distance))
         else:
             selected_option = menu_result
         # Restore mouse lock state
@@ -413,6 +427,15 @@ class GameEngine:
         self.render_distance_chunks = clamped_distance
         self.renderer.set_render_distance(clamped_distance)
         self.show_message(f"Render distance: {clamped_distance}")
+
+    def set_fog_distance(self, fog_distance: float) -> None:
+        """Set the user-selected fog distance and apply it to the renderer."""
+        clamped_distance = max(float(MIN_FOG_DISTANCE), min(float(MAX_FOG_DISTANCE), float(fog_distance)))
+        if abs(clamped_distance - self.fog_distance) < 0.001:
+            return
+        self.fog_distance = clamped_distance
+        self.renderer.set_fog_distance(clamped_distance)
+        self.show_message(f"Fog distance: {clamped_distance:.1f}")
     
     def run(self):
         """Main game loop"""

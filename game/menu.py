@@ -963,44 +963,74 @@ class ModernGLPauseSettingsMenu(ModernGLMenu):
         width: int,
         height: int,
         current_render_distance: int,
+        current_fog_distance: float,
         min_render_distance: int,
         max_render_distance: int,
+        min_fog_distance: float,
+        max_fog_distance: float,
         screen: pygame.Surface = None,
     ):
-        self.slider_value = int(current_render_distance)
+        self.render_distance_value = int(current_render_distance)
+        self.fog_distance_value = float(current_fog_distance)
         self.min_render_distance = int(min_render_distance)
         self.max_render_distance = int(max_render_distance)
-        self.dragging = False
-        self.slider_rect: Optional[pygame.Rect] = None
+        self.min_fog_distance = float(min_fog_distance)
+        self.max_fog_distance = float(max_fog_distance)
+        self.dragging_slider: Optional[str] = None
+        self.active_slider = 'render'
+        self.render_slider_rect: Optional[pygame.Rect] = None
+        self.fog_slider_rect: Optional[pygame.Rect] = None
         self.back_rect: Optional[pygame.Rect] = None
         super().__init__(width, height, screen)
-        self.slider_value = max(self.min_render_distance, min(self.max_render_distance, self.slider_value))
+        self.render_distance_value = max(self.min_render_distance, min(self.max_render_distance, self.render_distance_value))
+        self.fog_distance_value = max(self.min_fog_distance, min(self.max_fog_distance, self.fog_distance_value))
 
     def _create_buttons(self):
         self.buttons = {}
 
-    def _value_to_x(self, value: int) -> int:
-        if self.slider_rect is None:
+    def _value_to_x(self, value: float, slider_rect: Optional[pygame.Rect], minimum: float, maximum: float) -> int:
+        if slider_rect is None:
             return 0
-        if self.max_render_distance == self.min_render_distance:
-            return self.slider_rect.x
-        ratio = (value - self.min_render_distance) / float(self.max_render_distance - self.min_render_distance)
-        return int(self.slider_rect.x + ratio * self.slider_rect.width)
+        if maximum == minimum:
+            return slider_rect.x
+        ratio = (value - minimum) / float(maximum - minimum)
+        return int(slider_rect.x + ratio * slider_rect.width)
 
-    def _x_to_value(self, x: int) -> int:
-        if self.slider_rect is None:
-            return self.slider_value
-        clamped_x = max(self.slider_rect.x, min(self.slider_rect.right, x))
-        if self.slider_rect.width <= 0:
-            return self.min_render_distance
-        ratio = (clamped_x - self.slider_rect.x) / float(self.slider_rect.width)
-        value = self.min_render_distance + ratio * (self.max_render_distance - self.min_render_distance)
-        return int(round(value))
+    def _x_to_value(self, x: int, slider_rect: Optional[pygame.Rect], minimum: float, maximum: float, as_int: bool) -> float:
+        if slider_rect is None:
+            return minimum
+        clamped_x = max(slider_rect.x, min(slider_rect.right, x))
+        if slider_rect.width <= 0:
+            return minimum
+        ratio = (clamped_x - slider_rect.x) / float(slider_rect.width)
+        value = minimum + ratio * (maximum - minimum)
+        if as_int:
+            return float(int(round(value)))
+        return float(round(value, 1))
+
+    def _adjust_active_slider(self, delta: int) -> None:
+        if self.active_slider == 'fog':
+            step = 5.0
+            self.fog_distance_value = max(
+                self.min_fog_distance,
+                min(self.max_fog_distance, self.fog_distance_value + delta * step),
+            )
+            self.fog_distance_value = float(round(self.fog_distance_value, 1))
+        else:
+            self.render_distance_value = max(
+                self.min_render_distance,
+                min(self.max_render_distance, self.render_distance_value + delta),
+            )
+
+    def _set_slider_rects(self) -> pygame.Rect:
+        panel_rect = pygame.Rect(self.width // 2 - 320, self.height // 2 - 200, 640, 380)
+        self.render_slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 140, panel_rect.width - 140, 12)
+        self.fog_slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 228, panel_rect.width - 140, 12)
+        self.back_rect = pygame.Rect(panel_rect.centerx - 90, panel_rect.bottom - 76, 180, 46)
+        return panel_rect
 
     def handle_events(self):
-        panel_rect = pygame.Rect(self.width // 2 - 320, self.height // 2 - 170, 640, 320)
-        self.slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 140, panel_rect.width - 140, 12)
-        self.back_rect = pygame.Rect(panel_rect.centerx - 90, panel_rect.bottom - 80, 180, 46)
+        self._set_slider_rects()
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -1008,23 +1038,72 @@ class ModernGLPauseSettingsMenu(ModernGLMenu):
             elif event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER):
                     self.running = False
+                elif event.key in (pygame.K_UP, pygame.K_w):
+                    self.active_slider = 'render'
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    self.active_slider = 'fog'
                 elif event.key in (pygame.K_LEFT, pygame.K_a):
-                    self.slider_value = max(self.min_render_distance, self.slider_value - 1)
+                    self._adjust_active_slider(-1)
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                    self.slider_value = min(self.max_render_distance, self.slider_value + 1)
+                    self._adjust_active_slider(1)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                knob_x = self._value_to_x(self.slider_value)
-                knob_rect = pygame.Rect(knob_x - 14, self.slider_rect.centery - 14, 28, 28)
+                render_knob_x = self._value_to_x(
+                    float(self.render_distance_value),
+                    self.render_slider_rect,
+                    float(self.min_render_distance),
+                    float(self.max_render_distance),
+                )
+                render_knob_rect = pygame.Rect(render_knob_x - 14, self.render_slider_rect.centery - 14, 28, 28)
+
+                fog_knob_x = self._value_to_x(
+                    self.fog_distance_value,
+                    self.fog_slider_rect,
+                    self.min_fog_distance,
+                    self.max_fog_distance,
+                )
+                fog_knob_rect = pygame.Rect(fog_knob_x - 14, self.fog_slider_rect.centery - 14, 28, 28)
 
                 if self.back_rect.collidepoint(event.pos):
                     self.running = False
-                elif knob_rect.collidepoint(event.pos) or self.slider_rect.inflate(0, 24).collidepoint(event.pos):
-                    self.dragging = True
-                    self.slider_value = self._x_to_value(event.pos[0])
-            elif event.type == pygame.MOUSEMOTION and self.dragging:
-                self.slider_value = self._x_to_value(event.pos[0])
+                elif render_knob_rect.collidepoint(event.pos) or self.render_slider_rect.inflate(0, 24).collidepoint(event.pos):
+                    self.active_slider = 'render'
+                    self.dragging_slider = 'render'
+                    self.render_distance_value = int(self._x_to_value(
+                        event.pos[0],
+                        self.render_slider_rect,
+                        float(self.min_render_distance),
+                        float(self.max_render_distance),
+                        as_int=True,
+                    ))
+                elif fog_knob_rect.collidepoint(event.pos) or self.fog_slider_rect.inflate(0, 24).collidepoint(event.pos):
+                    self.active_slider = 'fog'
+                    self.dragging_slider = 'fog'
+                    self.fog_distance_value = self._x_to_value(
+                        event.pos[0],
+                        self.fog_slider_rect,
+                        self.min_fog_distance,
+                        self.max_fog_distance,
+                        as_int=False,
+                    )
+            elif event.type == pygame.MOUSEMOTION and self.dragging_slider:
+                if self.dragging_slider == 'render':
+                    self.render_distance_value = int(self._x_to_value(
+                        event.pos[0],
+                        self.render_slider_rect,
+                        float(self.min_render_distance),
+                        float(self.max_render_distance),
+                        as_int=True,
+                    ))
+                elif self.dragging_slider == 'fog':
+                    self.fog_distance_value = self._x_to_value(
+                        event.pos[0],
+                        self.fog_slider_rect,
+                        self.min_fog_distance,
+                        self.max_fog_distance,
+                        as_int=False,
+                    )
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                self.dragging = False
+                self.dragging_slider = None
 
     def _render_background(self):
         return
@@ -1044,9 +1123,7 @@ class ModernGLPauseSettingsMenu(ModernGLMenu):
         self.ctx.clear(self.bg_color[0], self.bg_color[1], self.bg_color[2], 1.0)
         self.ctx.viewport = (0, 0, self.width, self.height)
 
-        panel_rect = pygame.Rect(self.width // 2 - 320, self.height // 2 - 170, 640, 320)
-        self.slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 140, panel_rect.width - 140, 12)
-        self.back_rect = pygame.Rect(panel_rect.centerx - 90, panel_rect.bottom - 80, 180, 46)
+        panel_rect = self._set_slider_rects()
 
         # Dark pause overlay
         self._render_rect(0, 0, self.width, self.height, np.array([0.0, 0.0, 0.0], dtype=np.float32))
@@ -1072,23 +1149,55 @@ class ModernGLPauseSettingsMenu(ModernGLMenu):
             texture, tw, th = title_data
             self._render_texture(texture, self.width // 2 - tw // 2, panel_rect.y + 16, tw, th, np.array([1.0, 1.0, 1.0], dtype=np.float32))
 
-        label_text = f"Render Distance: {self.slider_value} chunks"
-        label_data = self._get_or_create_text_texture(label_text, 38, (235, 240, 255), bold=False)
-        if label_data is not None:
-            texture, lw, lh = label_data
+        render_label_text = f"Render Distance: {self.render_distance_value} chunks"
+        render_label_data = self._get_or_create_text_texture(render_label_text, 36, (235, 240, 255), bold=False)
+        if render_label_data is not None:
+            texture, lw, lh = render_label_data
             self._render_texture(texture, self.width // 2 - lw // 2, panel_rect.y + 90, lw, lh, np.array([1.0, 1.0, 1.0], dtype=np.float32))
 
-        self._render_rect(self.slider_rect.x, self.slider_rect.y, self.slider_rect.width, self.slider_rect.height, np.array([0.31, 0.35, 0.47], dtype=np.float32))
-        knob_x = self._value_to_x(self.slider_value)
-        filled_width = max(1, knob_x - self.slider_rect.x)
-        self._render_rect(self.slider_rect.x, self.slider_rect.y, filled_width, self.slider_rect.height, np.array([0.38, 0.58, 0.93], dtype=np.float32))
-        self._render_rect(knob_x - 10, self.slider_rect.centery - 10, 20, 20, np.array([0.93, 0.95, 1.0], dtype=np.float32))
+        fog_label_text = f"Fog Distance: {self.fog_distance_value:.1f}"
+        fog_label_data = self._get_or_create_text_texture(fog_label_text, 36, (235, 240, 255), bold=False)
+        if fog_label_data is not None:
+            texture, lw, lh = fog_label_data
+            self._render_texture(texture, self.width // 2 - lw // 2, panel_rect.y + 178, lw, lh, np.array([1.0, 1.0, 1.0], dtype=np.float32))
 
-        hint_text = f"Left/Right or drag slider ({self.min_render_distance}-{self.max_render_distance})"
-        hint_data = self._get_or_create_text_texture(hint_text, 22, (188, 194, 220), bold=False)
+        render_track_color = np.array([0.31, 0.35, 0.47], dtype=np.float32)
+        fog_track_color = np.array([0.31, 0.35, 0.47], dtype=np.float32)
+        if self.active_slider == 'render':
+            render_track_color = np.array([0.36, 0.43, 0.59], dtype=np.float32)
+        if self.active_slider == 'fog':
+            fog_track_color = np.array([0.36, 0.43, 0.59], dtype=np.float32)
+
+        self._render_rect(self.render_slider_rect.x, self.render_slider_rect.y, self.render_slider_rect.width, self.render_slider_rect.height, render_track_color)
+        render_knob_x = self._value_to_x(
+            float(self.render_distance_value),
+            self.render_slider_rect,
+            float(self.min_render_distance),
+            float(self.max_render_distance),
+        )
+        render_filled_width = max(1, render_knob_x - self.render_slider_rect.x)
+        self._render_rect(self.render_slider_rect.x, self.render_slider_rect.y, render_filled_width, self.render_slider_rect.height, np.array([0.38, 0.58, 0.93], dtype=np.float32))
+        self._render_rect(render_knob_x - 10, self.render_slider_rect.centery - 10, 20, 20, np.array([0.93, 0.95, 1.0], dtype=np.float32))
+
+        self._render_rect(self.fog_slider_rect.x, self.fog_slider_rect.y, self.fog_slider_rect.width, self.fog_slider_rect.height, fog_track_color)
+        fog_knob_x = self._value_to_x(
+            self.fog_distance_value,
+            self.fog_slider_rect,
+            self.min_fog_distance,
+            self.max_fog_distance,
+        )
+        fog_filled_width = max(1, fog_knob_x - self.fog_slider_rect.x)
+        self._render_rect(self.fog_slider_rect.x, self.fog_slider_rect.y, fog_filled_width, self.fog_slider_rect.height, np.array([0.38, 0.58, 0.93], dtype=np.float32))
+        self._render_rect(fog_knob_x - 10, self.fog_slider_rect.centery - 10, 20, 20, np.array([0.93, 0.95, 1.0], dtype=np.float32))
+
+        hint_text = (
+            f"Up/Down select slider, Left/Right adjust | Render {self.min_render_distance}-{self.max_render_distance}, "
+            f"Fog {self.min_fog_distance:.0f}-{self.max_fog_distance:.0f}"
+        )
+        hint_data = self._get_or_create_text_texture(hint_text, 20, (188, 194, 220), bold=False)
         if hint_data is not None:
             texture, hw, hh = hint_data
-            self._render_texture(texture, self.width // 2 - hw // 2, panel_rect.y + 188, hw, hh, np.array([1.0, 1.0, 1.0], dtype=np.float32))
+            self._render_texture(texture, self.width // 2 - hw // 2, panel_rect.y + 274, hw, hh, np.array([1.0, 1.0, 1.0], dtype=np.float32))
 
         mouse_pos = pygame.mouse.get_pos()
         back_hovered = self.back_rect.collidepoint(mouse_pos)
@@ -1108,7 +1217,7 @@ class ModernGLPauseSettingsMenu(ModernGLMenu):
 
         pygame.display.flip()
 
-    def run(self) -> int:
+    def run(self) -> Dict[str, float]:
         last_time = time.time()
         while self.running:
             current_time = time.time()
@@ -1119,7 +1228,10 @@ class ModernGLPauseSettingsMenu(ModernGLMenu):
             self.render()
             self.clock.tick(60)
         self._cleanup()
-        return self.slider_value
+        return {
+            'render_distance': float(self.render_distance_value),
+            'fog_distance': float(self.fog_distance_value),
+        }
 
 
 class ModernGLLoadMenu(ModernGLMenu):
@@ -1663,10 +1775,13 @@ def _show_pause_settings_menu(
     width: int,
     height: int,
     current_render_distance: int,
+    current_fog_distance: float,
     min_render_distance: int,
     max_render_distance: int,
-) -> int:
-    """Fallback pygame settings page with a render-distance slider."""
+    min_fog_distance: float,
+    max_fog_distance: float,
+) -> Dict[str, float]:
+    """Fallback pygame settings page with render-distance and fog sliders."""
     screen = pygame.display.set_mode((width, height))
     pygame.display.set_caption("Pycraft - Settings")
     pygame.mouse.set_visible(True)
@@ -1678,60 +1793,116 @@ def _show_pause_settings_menu(
     hint_font = pygame.font.Font(None, 28)
     button_font = pygame.font.Font(None, 36)
 
-    slider_value = max(min_render_distance, min(max_render_distance, int(current_render_distance)))
+    render_value = max(min_render_distance, min(max_render_distance, int(current_render_distance)))
+    fog_value = max(min_fog_distance, min(max_fog_distance, float(current_fog_distance)))
+    active_slider = 'render'
 
-    panel_rect = pygame.Rect(width // 2 - 320, height // 2 - 170, 640, 320)
-    slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 140, panel_rect.width - 140, 12)
+    panel_rect = pygame.Rect(width // 2 - 320, height // 2 - 200, 640, 380)
+    render_slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 140, panel_rect.width - 140, 12)
+    fog_slider_rect = pygame.Rect(panel_rect.x + 70, panel_rect.y + 228, panel_rect.width - 140, 12)
     knob_radius = 14
-    dragging = False
+    dragging_slider: Optional[str] = None
 
-    back_rect = pygame.Rect(panel_rect.centerx - 90, panel_rect.bottom - 80, 180, 46)
+    back_rect = pygame.Rect(panel_rect.centerx - 90, panel_rect.bottom - 76, 180, 46)
 
-    def _value_to_x(value: int) -> int:
-        if max_render_distance == min_render_distance:
+    def _value_to_x(value: float, slider_rect: pygame.Rect, minimum: float, maximum: float) -> int:
+        if maximum == minimum:
             return slider_rect.x
-        ratio = (value - min_render_distance) / float(max_render_distance - min_render_distance)
+        ratio = (value - minimum) / float(maximum - minimum)
         return int(slider_rect.x + ratio * slider_rect.width)
 
-    def _x_to_value(x: int) -> int:
+    def _x_to_value(x: int, slider_rect: pygame.Rect, minimum: float, maximum: float, as_int: bool) -> float:
         clamped_x = max(slider_rect.x, min(slider_rect.right, x))
         if slider_rect.width <= 0:
-            return min_render_distance
+            return minimum
         ratio = (clamped_x - slider_rect.x) / float(slider_rect.width)
-        value = min_render_distance + ratio * (max_render_distance - min_render_distance)
-        return int(round(value))
+        value = minimum + ratio * (maximum - minimum)
+        if as_int:
+            return float(int(round(value)))
+        return float(round(value, 1))
+
+    def _result() -> Dict[str, float]:
+        return {
+            'render_distance': float(render_value),
+            'fog_distance': float(fog_value),
+        }
 
     while True:
         mouse_pos = pygame.mouse.get_pos()
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return slider_value
+                return _result()
 
             if event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER):
-                    return slider_value
+                    return _result()
+                if event.key in (pygame.K_UP, pygame.K_w):
+                    active_slider = 'render'
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    active_slider = 'fog'
                 if event.key in (pygame.K_LEFT, pygame.K_a):
-                    slider_value = max(min_render_distance, slider_value - 1)
+                    if active_slider == 'fog':
+                        fog_value = max(min_fog_distance, fog_value - 5.0)
+                    else:
+                        render_value = max(min_render_distance, render_value - 1)
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                    slider_value = min(max_render_distance, slider_value + 1)
+                    if active_slider == 'fog':
+                        fog_value = min(max_fog_distance, fog_value + 5.0)
+                    else:
+                        render_value = min(max_render_distance, render_value + 1)
+                fog_value = float(round(fog_value, 1))
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                knob_x = _value_to_x(slider_value)
-                knob_rect = pygame.Rect(knob_x - knob_radius, slider_rect.centery - knob_radius, knob_radius * 2, knob_radius * 2)
+                render_knob_x = _value_to_x(float(render_value), render_slider_rect, float(min_render_distance), float(max_render_distance))
+                render_knob_rect = pygame.Rect(render_knob_x - knob_radius, render_slider_rect.centery - knob_radius, knob_radius * 2, knob_radius * 2)
+                fog_knob_x = _value_to_x(fog_value, fog_slider_rect, min_fog_distance, max_fog_distance)
+                fog_knob_rect = pygame.Rect(fog_knob_x - knob_radius, fog_slider_rect.centery - knob_radius, knob_radius * 2, knob_radius * 2)
 
                 if back_rect.collidepoint(event.pos):
-                    return slider_value
+                    return _result()
 
-                if knob_rect.collidepoint(event.pos) or slider_rect.inflate(0, 24).collidepoint(event.pos):
-                    dragging = True
-                    slider_value = _x_to_value(event.pos[0])
+                if render_knob_rect.collidepoint(event.pos) or render_slider_rect.inflate(0, 24).collidepoint(event.pos):
+                    active_slider = 'render'
+                    dragging_slider = 'render'
+                    render_value = int(_x_to_value(
+                        event.pos[0],
+                        render_slider_rect,
+                        float(min_render_distance),
+                        float(max_render_distance),
+                        as_int=True,
+                    ))
+                elif fog_knob_rect.collidepoint(event.pos) or fog_slider_rect.inflate(0, 24).collidepoint(event.pos):
+                    active_slider = 'fog'
+                    dragging_slider = 'fog'
+                    fog_value = _x_to_value(
+                        event.pos[0],
+                        fog_slider_rect,
+                        min_fog_distance,
+                        max_fog_distance,
+                        as_int=False,
+                    )
 
-            if event.type == pygame.MOUSEMOTION and dragging:
-                slider_value = _x_to_value(event.pos[0])
+            if event.type == pygame.MOUSEMOTION and dragging_slider:
+                if dragging_slider == 'render':
+                    render_value = int(_x_to_value(
+                        event.pos[0],
+                        render_slider_rect,
+                        float(min_render_distance),
+                        float(max_render_distance),
+                        as_int=True,
+                    ))
+                elif dragging_slider == 'fog':
+                    fog_value = _x_to_value(
+                        event.pos[0],
+                        fog_slider_rect,
+                        min_fog_distance,
+                        max_fog_distance,
+                        as_int=False,
+                    )
 
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                dragging = False
+                dragging_slider = None
 
         screen.fill((14, 17, 30))
 
@@ -1745,20 +1916,37 @@ def _show_pause_settings_menu(
         title_surface = title_font.render("SETTINGS", True, (245, 245, 255))
         screen.blit(title_surface, title_surface.get_rect(center=(width // 2, panel_rect.y + 46)))
 
-        label_text = f"Render Distance: {slider_value} chunks"
-        label_surface = label_font.render(label_text, True, (235, 240, 255))
-        screen.blit(label_surface, label_surface.get_rect(center=(width // 2, panel_rect.y + 110)))
+        render_label_text = f"Render Distance: {render_value} chunks"
+        render_label_surface = label_font.render(render_label_text, True, (235, 240, 255))
+        screen.blit(render_label_surface, render_label_surface.get_rect(center=(width // 2, panel_rect.y + 110)))
 
-        pygame.draw.rect(screen, (78, 88, 120), slider_rect, border_radius=6)
-        knob_x = _value_to_x(slider_value)
-        filled_rect = pygame.Rect(slider_rect.x, slider_rect.y, max(1, knob_x - slider_rect.x), slider_rect.height)
-        pygame.draw.rect(screen, (96, 148, 238), filled_rect, border_radius=6)
-        pygame.draw.circle(screen, (236, 243, 255), (knob_x, slider_rect.centery), knob_radius)
-        pygame.draw.circle(screen, (94, 120, 186), (knob_x, slider_rect.centery), knob_radius, 2)
+        fog_label_text = f"Fog Distance: {fog_value:.1f}"
+        fog_label_surface = label_font.render(fog_label_text, True, (235, 240, 255))
+        screen.blit(fog_label_surface, fog_label_surface.get_rect(center=(width // 2, panel_rect.y + 198)))
 
-        hint_text = f"Left/Right or drag slider ({min_render_distance}-{max_render_distance})"
+        render_track_color = (92, 110, 156) if active_slider == 'render' else (78, 88, 120)
+        fog_track_color = (92, 110, 156) if active_slider == 'fog' else (78, 88, 120)
+
+        pygame.draw.rect(screen, render_track_color, render_slider_rect, border_radius=6)
+        render_knob_x = _value_to_x(float(render_value), render_slider_rect, float(min_render_distance), float(max_render_distance))
+        render_filled_rect = pygame.Rect(render_slider_rect.x, render_slider_rect.y, max(1, render_knob_x - render_slider_rect.x), render_slider_rect.height)
+        pygame.draw.rect(screen, (96, 148, 238), render_filled_rect, border_radius=6)
+        pygame.draw.circle(screen, (236, 243, 255), (render_knob_x, render_slider_rect.centery), knob_radius)
+        pygame.draw.circle(screen, (94, 120, 186), (render_knob_x, render_slider_rect.centery), knob_radius, 2)
+
+        pygame.draw.rect(screen, fog_track_color, fog_slider_rect, border_radius=6)
+        fog_knob_x = _value_to_x(fog_value, fog_slider_rect, min_fog_distance, max_fog_distance)
+        fog_filled_rect = pygame.Rect(fog_slider_rect.x, fog_slider_rect.y, max(1, fog_knob_x - fog_slider_rect.x), fog_slider_rect.height)
+        pygame.draw.rect(screen, (96, 148, 238), fog_filled_rect, border_radius=6)
+        pygame.draw.circle(screen, (236, 243, 255), (fog_knob_x, fog_slider_rect.centery), knob_radius)
+        pygame.draw.circle(screen, (94, 120, 186), (fog_knob_x, fog_slider_rect.centery), knob_radius, 2)
+
+        hint_text = (
+            f"Up/Down select slider, Left/Right adjust | Render {min_render_distance}-{max_render_distance}, "
+            f"Fog {min_fog_distance:.0f}-{max_fog_distance:.0f}"
+        )
         hint_surface = hint_font.render(hint_text, True, (188, 194, 220))
-        screen.blit(hint_surface, hint_surface.get_rect(center=(width // 2, panel_rect.y + 195)))
+        screen.blit(hint_surface, hint_surface.get_rect(center=(width // 2, panel_rect.y + 282)))
 
         back_hovered = back_rect.collidepoint(mouse_pos)
         back_bg = (82, 106, 162) if back_hovered else (60, 76, 120)
@@ -1777,11 +1965,15 @@ def show_pause_menu(
     height: int = 768,
     screen: Optional[pygame.Surface] = None,
     current_render_distance: int = RENDER_DISTANCE,
+    current_fog_distance: float = FOG_DISTANCE,
     min_render_distance: int = MIN_RENDER_DISTANCE,
     max_render_distance: int = MAX_RENDER_DISTANCE,
+    min_fog_distance: float = MIN_FOG_DISTANCE,
+    max_fog_distance: float = MAX_FOG_DISTANCE,
 ) -> Optional[Dict[str, object]]:
     """Show the pause menu and return action + settings values."""
     render_distance = max(min_render_distance, min(max_render_distance, int(current_render_distance)))
+    fog_distance = max(min_fog_distance, min(max_fog_distance, float(current_fog_distance)))
 
     while True:
         menu_result: Optional[str]
@@ -1814,32 +2006,48 @@ def show_pause_menu(
                         width,
                         height,
                         current_render_distance=render_distance,
+                        current_fog_distance=fog_distance,
                         min_render_distance=min_render_distance,
                         max_render_distance=max_render_distance,
+                        min_fog_distance=min_fog_distance,
+                        max_fog_distance=max_fog_distance,
                         screen=current_surface,
                     )
-                    render_distance = settings_menu.run()
+                    settings_values = settings_menu.run()
+                    render_distance = int(settings_values.get('render_distance', render_distance))
+                    fog_distance = float(settings_values.get('fog_distance', fog_distance))
                 except Exception as settings_error:
                     print(f"⚠️ ModernGL settings menu failed: {settings_error}")
                     print("📱 Falling back to simple settings menu")
-                    render_distance = _show_pause_settings_menu(
+                    settings_values = _show_pause_settings_menu(
                         width,
                         height,
                         current_render_distance=render_distance,
+                        current_fog_distance=fog_distance,
                         min_render_distance=min_render_distance,
                         max_render_distance=max_render_distance,
+                        min_fog_distance=min_fog_distance,
+                        max_fog_distance=max_fog_distance,
                     )
+                    render_distance = int(settings_values.get('render_distance', render_distance))
+                    fog_distance = float(settings_values.get('fog_distance', fog_distance))
             else:
-                render_distance = _show_pause_settings_menu(
+                settings_values = _show_pause_settings_menu(
                     width,
                     height,
                     current_render_distance=render_distance,
+                    current_fog_distance=fog_distance,
                     min_render_distance=min_render_distance,
                     max_render_distance=max_render_distance,
+                    min_fog_distance=min_fog_distance,
+                    max_fog_distance=max_fog_distance,
                 )
+                render_distance = int(settings_values.get('render_distance', render_distance))
+                fog_distance = float(settings_values.get('fog_distance', fog_distance))
             continue
 
         return {
             'action': menu_result,
             'render_distance': render_distance,
+            'fog_distance': fog_distance,
         }
